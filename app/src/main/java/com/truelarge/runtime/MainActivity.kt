@@ -101,9 +101,15 @@ fun AppNavigation(
             CatalogScreen(
                 modelRepository = modelRepository,
                 onSearchClick = { navController.navigate("search") },
-                onModelSelect = { path ->
-                    val encoded = URLEncoder.encode(path, "UTF-8")
-                    navController.navigate("inference/$encoded")
+                onModelSelect = { targetPath, draftPath ->
+                    val encodedTarget = URLEncoder.encode(targetPath, "UTF-8")
+                    val route = if (draftPath != null) {
+                        val encodedDraft = URLEncoder.encode(draftPath, "UTF-8")
+                        "inference/$encodedTarget?draftPath=$encodedDraft"
+                    } else {
+                        "inference/$encodedTarget"
+                    }
+                    navController.navigate(route)
                 },
                 onRecommendedClick = { repoId ->
                     val encoded = URLEncoder.encode(repoId, "UTF-8")
@@ -139,13 +145,17 @@ fun AppNavigation(
 
         composable(
             route = "inference/{modelPath}",
-            arguments = listOf(navArgument("modelPath") { type = NavType.StringType })
+            arguments = listOf(
+                navArgument("modelPath") { type = NavType.StringType }
+            )
         ) { backStackEntry ->
             val encodedPath = backStackEntry.arguments?.getString("modelPath") ?: ""
             val modelPath = URLDecoder.decode(encodedPath, "UTF-8")
+            
             InferenceScreen(
                 engine = engine,
                 modelPath = modelPath,
+                modelRepository = modelRepository,
                 onBack = { navController.popBackStack() }
             )
         }
@@ -157,6 +167,7 @@ fun AppNavigation(
 fun InferenceScreen(
     engine: NativeEngine,
     modelPath: String,
+    modelRepository: ModelRepository,
     onBack: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -171,6 +182,23 @@ fun InferenceScreen(
     var maxTokens by remember { mutableStateOf(256f) }
     var contextTrain by remember { mutableIntStateOf(0) }
     var tps by remember { mutableStateOf(0.0) }
+
+    // Load model on start
+    LaunchedEffect(modelPath) {
+        withContext(Dispatchers.IO) {
+            status = "Loading model..."
+            val ok = engine.init(modelPath, 4, 0)
+            if (ok) {
+                contextTrain = engine.getContextTrain()
+                withContext(Dispatchers.Main) {
+                    status = "Model loaded"
+                    isRunning = true
+                }
+            } else {
+                withContext(Dispatchers.Main) { status = "Load failed" }
+            }
+        }
+    }
 
     // Extract model name from path for display
     val modelName = remember(modelPath) {
@@ -246,36 +274,7 @@ fun InferenceScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Load button (only show if not loaded)
-            if (status == "Ready" || status == "Session cleared") {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            status = "Loading model..."
-                            withContext(Dispatchers.IO) {
-                                val ok = engine.init(modelPath, 4, 0)
-                                if (ok) {
-                                    contextTrain = engine.getContextTrain()
-                                    withContext(Dispatchers.Main) {
-                                        status = "Model loaded"
-                                        isRunning = true
-                                    }
-                                } else {
-                                    withContext(Dispatchers.Main) {
-                                        status = "Load failed"
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Load Model")
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
+            Spacer(modifier = Modifier.height(16.dp))
 
             // Chat History Area
             if (chatHistory.isNotEmpty() || output.isNotEmpty() || isGenerating) {
@@ -352,15 +351,19 @@ fun InferenceScreen(
                                         val sb = StringBuilder()
                                         var tokenCount = 0
                                         val startTime = System.currentTimeMillis()
-                                        repeat(maxTokens.toInt()) {
-                                            if (!isGenerating) return@repeat
-                                            val piece = engine.step()
-                                            if (piece.isEmpty()) return@repeat
+                                        val responseBytes = mutableListOf<Byte>()
+                                        for (i in 0 until maxTokens.toInt()) {
+                                            if (!isGenerating) break
+                                            val pieceBytes = engine.step()
+                                            if (pieceBytes == null || pieceBytes.isEmpty()) break
+                                            
                                             tokenCount++
-                                            sb.append(piece)
+                                            responseBytes.addAll(pieceBytes.toList())
+                                            val currentString = String(responseBytes.toByteArray(), Charsets.UTF_8)
                                             val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+                                            
                                             withContext(Dispatchers.Main) {
-                                                output = sb.toString()
+                                                output = currentString
                                                 if (elapsed > 0) tps = tokenCount / elapsed
                                             }
                                         }

@@ -31,7 +31,7 @@ import com.truelarge.runtime.data.RecommendedModel
 fun CatalogScreen(
     modelRepository: ModelRepository,
     onSearchClick: () -> Unit,
-    onModelSelect: (String) -> Unit,
+    onModelSelect: (String, String?) -> Unit,
     onRecommendedClick: (String) -> Unit
 ) {
     var localModels by remember { mutableStateOf(modelRepository.getLocalModels()) }
@@ -126,7 +126,7 @@ fun CatalogScreen(
             items(localModels) { model ->
                 LocalModelCard(
                     model = model,
-                    onLoad = { onModelSelect(model.path) },
+                    onLoad = { onModelSelect(model.path, null) },
                     onDelete = {
                         modelRepository.deleteModel(model.path)
                         localModels = modelRepository.getLocalModels()

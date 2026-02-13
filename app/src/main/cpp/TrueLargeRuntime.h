@@ -49,11 +49,18 @@ private:
     std::unique_ptr<GGUFHeaderParser> headerParser;
     std::unique_ptr<LayerLoader> layerLoader;
 
-    // llama.cpp structures
+    // llama.cpp structures (Target Model)
     llama_model* model = nullptr;
     llama_context* ctx = nullptr;
     struct llama_sampler* sampler = nullptr;
-    
+
+    // Speculative Decoding (Draft Model)
+    llama_model* model_dft = nullptr;
+    llama_context* ctx_dft = nullptr;
+    struct llama_sampler* sampler_dft = nullptr;
+    int nPastDft = 0;
+    std::vector<llama_token> speculativeBuffer;
+
     // Internal state for generation
     std::vector<llama_token> generatedTokens;
     int nPast = 0;

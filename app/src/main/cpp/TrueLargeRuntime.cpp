@@ -10,6 +10,7 @@
 
 #define TAG "TrueLargePerf"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 // Helper to get RAM usage (RSS)
@@ -206,6 +207,8 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
     }
 
     // Prepare batch manually since helper is missing
+
+    // Prepare batch manually since helper is missing
     if (g_batch_init) {
         llama_batch_free(g_batch);
     }
@@ -232,7 +235,7 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
         LOGE("llama_decode failed");
         return false;
     }
-    
+
     auto end = std::chrono::steady_clock::now();
     double duration = std::chrono::duration<double, std::milli>(end - start).count();
     
@@ -262,19 +265,16 @@ std::string token_to_str(const llama_context* ctx, llama_token token) {
 std::string TrueLargeRuntime::step() {
     if (!ctx || !sampler) return "";
 
-    // Sample next token
+    // Fallback: Normal single-token inference
     llama_token next_token = llama_sampler_sample(sampler, ctx, -1);
     llama_sampler_accept(sampler, next_token);
 
-    // Check optional termination (EOS)
     const llama_vocab* vocab = llama_model_get_vocab(model);
     if (next_token == llama_vocab_eos(vocab)) {
         LOGI("EOS generated");
-        return ""; // Signal end
+        return "";
     }
 
-    // Decode next token
-    // Reuse batch
     g_batch.n_tokens = 1;
     g_batch.token[0] = next_token;
     g_batch.pos[0] = nPast;
@@ -283,43 +283,34 @@ std::string TrueLargeRuntime::step() {
     g_batch.logits[0] = true;
 
     auto start = std::chrono::high_resolution_clock::now();
-    
-    if (llama_decode(ctx, g_batch) != 0) {
-        LOGE("llama_decode failed during generation");
-        return "";
-    }
-
+    if (llama_decode(ctx, g_batch) != 0) return "";
     auto end = std::chrono::steady_clock::now();
+    
     double duration = std::chrono::duration<double, std::milli>(end - start).count();
-
     nPast += 1;
     generatedTokens.push_back(next_token);
-
     std::string piece = token_to_str(ctx, next_token);
 
-    // Calculate TTFT on first token
     if (generatedTokens.size() == 1) {
         auto ttft = std::chrono::duration<double, std::milli>(end - t_session_start).count();
         LOGI("TTFT: %.2f ms", ttft);
     }
 
-    // Calculate cumulative TPS
-    auto total_gen_duration = std::chrono::duration<double>(end - t_generation_start).count();
-    double tps = generatedTokens.size() / total_gen_duration;
-
-    // Telemetry log every token
-    long freqHz = getCurrentCpuFreqHz();
-    int cpuId = sched_getcpu();
-    long availKB = getAvailableMemoryKB();
+    double tps = generatedTokens.size() / std::chrono::duration<double>(end - t_generation_start).count();
     
-    // Warn if we are likely IO-bound due to paging
-    std::string ioWarning = "";
-    if (availKB < 500000) { // Less than 500MB free
-        ioWarning = " [LOW-RAM IO-WAIT]";
+    // Telemetry: RAM and CPU
+    long rss_kb = getMemoryUsageKB();
+    long avail_kb = getAvailableMemoryKB();
+    long freq_hz = getCurrentCpuFreqHz();
+    int cpu_id = sched_getcpu();
+    
+    const char* warning = "";
+    if (avail_kb < 512 * 1024) { // Warning if less than 512MB free
+        warning = "[LOW-RAM IO-WAIT] ";
     }
 
-    LOGI("Gen: %d -> Token %d ('%s') | Speed: %.2f ms | CPU: Core %d @ %.2f GHz%s | TPS: %.2f | App RAM: %ld KB", 
-         (int)generatedTokens.size(), next_token, piece.c_str(), duration, cpuId, (double)freqHz / 1e9, ioWarning.c_str(), tps, getMemoryUsageKB());
+    LOGI("%sGen: %d -> Token %d ('%s') | Speed: %.2f ms | TPS: %.2f | RAM: %ld MB | CPU: #%d @ %.2f GHz", 
+         warning, (int)generatedTokens.size(), next_token, piece.c_str(), duration, tps, rss_kb / 1024, cpu_id, freq_hz / 1e9);
 
     return piece;
 }
@@ -342,6 +333,10 @@ void TrueLargeRuntime::release() {
     if (sampler) {
         llama_sampler_free(sampler);
         sampler = nullptr;
+    }
+    if (sampler_dft) {
+        llama_sampler_free(sampler_dft);
+        sampler_dft = nullptr;
     }
     if (ctx) {
         llama_free(ctx);

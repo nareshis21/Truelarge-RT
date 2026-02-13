@@ -45,11 +45,15 @@ Java_com_truelarge_runtime_NativeEngine_configureSampler(JNIEnv* env, jobject, j
     }
 }
 
-JNIEXPORT jstring JNICALL
+JNIEXPORT jbyteArray JNICALL
 Java_com_truelarge_runtime_NativeEngine_step(JNIEnv* env, jobject) {
-    if (!engine) return env->NewStringUTF("");
+    if (!engine) return nullptr;
     std::string piece = engine->step();
-    return env->NewStringUTF(piece.c_str());
+    if (piece.empty()) return nullptr;
+
+    jbyteArray bytes = env->NewByteArray(piece.size());
+    env->SetByteArrayRegion(bytes, 0, piece.size(), (jbyte*)piece.c_str());
+    return bytes;
 }
 
 JNIEXPORT void JNICALL
