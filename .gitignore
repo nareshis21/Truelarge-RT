@@ -1,0 +1,53 @@
+# Built artifacts
+*.class
+*.dex
+*.apk
+*.ap_
+*.aab
+bin/
+gen/
+out/
+build/
+app/build/
+
+# Gradle
+.gradle/
+local.properties
+gradle.xml
+.navigation/
+
+# IDE files
+.idea/
+*.iml
+*.iws
+*.ipr
+.project
+.classpath
+.settings/
+
+# Native Build
+.externalNativeBuild/
+.cxx/
+*.o
+*.so
+*.a
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.ninja
+*.ninja_deps
+*.ninja_log
+
+# Large Files & Model Weights
+*.gguf
+*.bin
+*.model
+*.onnx
+
+# OS / Misc
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.bak
