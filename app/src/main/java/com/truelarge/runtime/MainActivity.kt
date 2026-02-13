@@ -162,9 +162,10 @@ fun InferenceScreen(
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf("Ready") }
     var output by remember { mutableStateOf("") }
+    var chatHistory by remember { mutableStateOf(listOf<Pair<String, String>>()) }
     var isRunning by remember { mutableStateOf(false) }
     var isGenerating by remember { mutableStateOf(false) }
-    var prompt by remember { mutableStateOf("Hello, ") }
+    var prompt by remember { mutableStateOf("") }
     var temperature by remember { mutableStateOf(0.7f) }
     var topP by remember { mutableStateOf(0.9f) }
     var maxTokens by remember { mutableStateOf(256f) }
@@ -192,6 +193,22 @@ fun InferenceScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, "Back")
+                    }
+                },
+                actions = {
+                    if (chatHistory.isNotEmpty() || output.isNotEmpty()) {
+                        TextButton(onClick = {
+                            chatHistory = emptyList()
+                            output = ""
+                            status = "Session cleared"
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    engine.createSession("", false) // Reset engine context
+                                }
+                            }
+                        }) {
+                            Text("Clear Session", color = MaterialTheme.colorScheme.error)
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -229,7 +246,72 @@ fun InferenceScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Load button (only show if not loaded)
+            if (status == "Ready" || status == "Session cleared") {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            status = "Loading model..."
+                            withContext(Dispatchers.IO) {
+                                val ok = engine.init(modelPath, 4, 0)
+                                if (ok) {
+                                    contextTrain = engine.getContextTrain()
+                                    withContext(Dispatchers.Main) {
+                                        status = "Model loaded"
+                                        isRunning = true
+                                    }
+                                } else {
+                                    withContext(Dispatchers.Main) {
+                                        status = "Load failed"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Load Model")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            // Chat History Area
+            if (chatHistory.isNotEmpty() || output.isNotEmpty() || isGenerating) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().weight(1f).padding(vertical = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    androidx.compose.foundation.lazy.LazyColumn(
+                        modifier = Modifier.padding(8.dp).fillMaxWidth(),
+                        reverseLayout = false
+                    ) {
+                        items(chatHistory.size) { index ->
+                            val (q, a) = chatHistory[index]
+                            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                Text("User: $q", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                                Text("AI: $a", style = MaterialTheme.typography.bodyMedium)
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(top = 8.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f)
+                                )
+                            }
+                        }
+                        if (isGenerating || output.isNotEmpty()) {
+                            item {
+                                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                    Text("User: ${if (isGenerating && prompt.isNotEmpty()) prompt else chatHistory.lastOrNull()?.first ?: ""}",
+                                        fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                                    Text("AI: $output", style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                Spacer(modifier = Modifier.weight(1f))
+            }
 
             // Prompt input
             OutlinedTextField(
@@ -237,11 +319,83 @@ fun InferenceScreen(
                 onValueChange = { prompt = it },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Prompt") },
-                minLines = 3,
-                maxLines = 5
+                minLines = 2,
+                maxLines = 4
             )
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Run/Stop button
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (isGenerating) {
+                    Button(
+                        onClick = { isGenerating = false },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("Stop Generation")
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            val currentPrompt = prompt
+                            scope.launch {
+                                isGenerating = true
+                                status = "Running inference..."
+                                tps = 0.0
+                                val finalOutput = withContext(Dispatchers.IO) {
+                                    engine.configureSampler(temperature, 40, topP)
+                                    val ok = engine.createSession(currentPrompt, chatHistory.isNotEmpty())
+                                    if (ok) {
+                                        val sb = StringBuilder()
+                                        var tokenCount = 0
+                                        val startTime = System.currentTimeMillis()
+                                        repeat(maxTokens.toInt()) {
+                                            if (!isGenerating) return@repeat
+                                            val piece = engine.step()
+                                            if (piece.isEmpty()) return@repeat
+                                            tokenCount++
+                                            sb.append(piece)
+                                            val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+                                            withContext(Dispatchers.Main) {
+                                                output = sb.toString()
+                                                if (elapsed > 0) tps = tokenCount / elapsed
+                                            }
+                                        }
+                                        sb.toString()
+                                    } else null
+                                }
+                                withContext(Dispatchers.Main) {
+                                    if (finalOutput != null) {
+                                        chatHistory = chatHistory + (currentPrompt to finalOutput)
+                                        output = ""
+                                        prompt = ""
+                                    }
+                                    status = "Done"
+                                    isGenerating = false
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = isRunning && status != "Loading model..." && prompt.isNotBlank()
+                    ) {
+                        Text("Run Inference")
+                    }
+                }
+
+                if (tps > 0) {
+                    Text(
+                        text = "Speed: ${"%.1f".format(tps)} t/s",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Sampler Settings
             Column(modifier = Modifier.fillMaxWidth()) {
@@ -260,121 +414,6 @@ fun InferenceScreen(
                         onValueChange = { maxTokens = it },
                         valueRange = 128f..(if (contextTrain > 0) contextTrain.toFloat() else 4096f),
                         modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Load button
-            Button(
-                onClick = {
-                    if (!isRunning) {
-                        isRunning = true
-                        status = "Loading model..."
-                        scope.launch {
-                            withContext(Dispatchers.IO) {
-                                val nThreads = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
-                                val ok = engine.init(modelPath, nThreads, 0)
-                                withContext(Dispatchers.Main) {
-                                    status = if (ok) "Model loaded" else "Failed to load"
-                                    if (ok) {
-                                        contextTrain = engine.getContextTrain()
-                                        if (maxTokens > contextTrain && contextTrain > 0) {
-                                            maxTokens = contextTrain.toFloat()
-                                        }
-                                    }
-                                    if (!ok) isRunning = false
-                                }
-                            }
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !isRunning
-            ) {
-                Text("Load Model")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Run/Stop button
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                if (isGenerating) {
-                    Button(
-                        onClick = { isGenerating = false },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
-                        )
-                    ) {
-                        Text("Stop Generation")
-                    }
-                } else {
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                isGenerating = true
-                                status = "Running inference..."
-                                tps = 0.0
-                                withContext(Dispatchers.IO) {
-                                    engine.configureSampler(temperature, 40, topP)
-                                    val ok = engine.createSession(prompt)
-                                    if (ok) {
-                                        val sb = StringBuilder()
-                                        var tokenCount = 0
-                                        val startTime = System.currentTimeMillis()
-                                        repeat(maxTokens.toInt()) {
-                                            if (!isGenerating) return@repeat
-                                            val piece = engine.step()
-                                            if (piece.isEmpty()) return@repeat
-                                            tokenCount++
-                                            sb.append(piece)
-                                            val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
-                                            withContext(Dispatchers.Main) {
-                                                output = sb.toString()
-                                                if (elapsed > 0) tps = tokenCount / elapsed
-                                            }
-                                        }
-                                    }
-                                    withContext(Dispatchers.Main) {
-                                        status = "Done"
-                                        isGenerating = false
-                                    }
-                                }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = isRunning && status == "Model loaded"
-                    ) {
-                        Text("Run Inference")
-                    }
-                }
-
-                if (tps > 0) {
-                    Text(
-                        text = "Speed: ${"%.1f".format(tps)} t/s",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Output
-            if (output.isNotEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
-                    Text(
-                        text = output,
-                        modifier = Modifier.padding(16.dp),
-                        style = MaterialTheme.typography.bodyMedium
                     )
                 }
             }

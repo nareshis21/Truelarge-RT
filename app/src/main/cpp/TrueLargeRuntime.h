@@ -23,7 +23,7 @@ public:
     void configureSampler(float temp, int k, float p);
 
     // 3. Create context for a prompt
-    bool createSession(const std::string& prompt);
+    bool createSession(const std::string& prompt, bool keepHistory = false);
 
     // 4. Generate next token (step)
     // Returns the token string piece, or empty string/special value for EOS/Error

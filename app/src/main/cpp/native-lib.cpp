@@ -28,14 +28,14 @@ Java_com_truelarge_runtime_NativeEngine_init(JNIEnv* env, jobject, jstring model
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_truelarge_runtime_NativeEngine_createSession(JNIEnv* env, jobject, jstring prompt) {
+Java_com_truelarge_runtime_NativeEngine_createSession(JNIEnv* env, jobject, jstring prompt, jboolean keepHistory) {
     if (!engine) return JNI_FALSE;
 
     const char* cPrompt = env->GetStringUTFChars(prompt, nullptr);
     std::string sPrompt(cPrompt);
     env->ReleaseStringUTFChars(prompt, cPrompt);
 
-    return engine->createSession(sPrompt) ? JNI_TRUE : JNI_FALSE;
+    return engine->createSession(sPrompt, keepHistory == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL

@@ -155,7 +155,7 @@ void TrueLargeRuntime::configureSampler(float temp, int k, float p) {
 static llama_batch g_batch;
 static bool g_batch_init = false;
 
-bool TrueLargeRuntime::createSession(const std::string& prompt) {
+bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory) {
     t_session_start = std::chrono::steady_clock::now();
     set_cpu_affinity(); // Pin to big cores for this session
     if (!model || !ctx) {
@@ -185,34 +185,38 @@ bool TrueLargeRuntime::createSession(const std::string& prompt) {
     // API change: needs vocab
     const llama_vocab* vocab = llama_model_get_vocab(model);
     
-    int n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.length(), tokens.data(), tokens.size(), true, false);
+    // When keeping history, usually we don't want to re-add BOS if nPast > 0
+    bool add_bos = (nPast == 0);
+    int n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.length(), tokens.data(), tokens.size(), add_bos, false);
     if (n_tokens < 0) {
         tokens.resize(-n_tokens);
-        n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.length(), tokens.data(), tokens.size(), true, false);
+        n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.length(), tokens.data(), tokens.size(), add_bos, false);
     }
     tokens.resize(n_tokens);
 
-    LOGI("Tokenized prompt: %d tokens. \"%s\"", n_tokens, prompt.c_str());
+    LOGI("Tokenized prompt: %d tokens. History: %d. \"%s\"", n_tokens, nPast, prompt.c_str());
 
-    // Clear KV cache for new session
-    // API change: llama_kv_cache_clear -> llama_memory_seq_rm
-    llama_memory_t mem = llama_get_memory(ctx);
-    llama_memory_seq_rm(mem, -1, 0, -1);
-    
-    nPast = 0;
-    generatedTokens.clear();
+    if (!keepHistory) {
+        // Clear KV cache for new session
+        llama_memory_t mem = llama_get_memory(ctx);
+        llama_memory_seq_rm(mem, -1, 0, -1);
+        
+        nPast = 0;
+        generatedTokens.clear();
+    }
 
     // Prepare batch manually since helper is missing
     if (g_batch_init) {
         llama_batch_free(g_batch);
     }
-    g_batch = llama_batch_init(2048, 0, 1); // Max batch size
+    // Max batch size should be enough for the prompt
+    g_batch = llama_batch_init(std::max(2048, n_tokens), 0, 1); 
     g_batch_init = true;
 
     g_batch.n_tokens = n_tokens;
     for (int i = 0; i < n_tokens; i++) {
         g_batch.token[i] = tokens[i];
-        g_batch.pos[i] = i;
+        g_batch.pos[i] = nPast + i;
         g_batch.n_seq_id[i] = 1;
         g_batch.seq_id[i][0] = 0;
         g_batch.logits[i] = false;
@@ -232,7 +236,7 @@ bool TrueLargeRuntime::createSession(const std::string& prompt) {
     auto end = std::chrono::steady_clock::now();
     double duration = std::chrono::duration<double, std::milli>(end - start).count();
     
-    nPast = g_batch.n_tokens;
+    nPast += g_batch.n_tokens;
     t_generation_start = std::chrono::steady_clock::now();
     LOGI("Prompt Eval Speed: %.2f ms for %d tokens (%.2f t/s)", duration, n_tokens, (n_tokens / duration) * 1000.0);
     
