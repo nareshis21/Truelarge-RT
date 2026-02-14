@@ -13,6 +13,13 @@ TrueLarge-RT is a native Android inference engine built on top of `llama.cpp`. I
 - **Multi-Turn Persistence**: Optimized KV cache management for fast, conversational multi-turn inference.
 - **Developer-First Logging**: Detailed telemetry including CPU Core ID (#ID) tracking for performance profiling.
 
+## Low-RAM Optimization (4GB Devices)
+
+TrueLarge-RT is optimized to run large models (7B - 13B) even on constrained hardware:
+- **Smart Paging (Mmap)**: Automatically disables `mlock` when low RAM is detected, leveraging high-speed storage as virtual memory.
+- **KV Cache Capping**: Caps context buffers to 2048 tokens to maintain a stable memory footprint.
+- **CPU Affinity**: Intelligent thread mapping to "Big" performance cores to minimize latency during memory swaps.
+
 ## Comparison with Other Runtimes
 
 | Feature | TrueLarge-RT | SmolChat | ONNX Runtime | Google AICore |
