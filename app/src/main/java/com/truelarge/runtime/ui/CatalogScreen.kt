@@ -8,8 +8,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoGraph
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -32,7 +36,8 @@ fun CatalogScreen(
     modelRepository: ModelRepository,
     onSearchClick: () -> Unit,
     onModelSelect: (String, String?) -> Unit,
-    onRecommendedClick: (String) -> Unit
+    onRecommendedClick: (String) -> Unit,
+    onBenchmark: (String) -> Unit
 ) {
     var localModels by remember { mutableStateOf(modelRepository.getLocalModels()) }
     val recommendedModels = remember { modelRepository.getRecommendedModels() }
@@ -57,6 +62,11 @@ fun CatalogScreen(
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { localModels = modelRepository.getLocalModels() }) {
+                        Icon(Icons.Default.Refresh, "Refresh")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -97,24 +107,31 @@ fun CatalogScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        ),
-                        shape = RoundedCornerShape(12.dp)
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        )
                     ) {
                         Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
+                            modifier = Modifier.padding(24.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text(
-                                "No models yet",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = null,
+                                modifier = Modifier.size(48.dp),
+                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
                             Text(
-                                "Download a model to get started",
+                                "No Models Found",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "To add models manually, paste your .gguf files in:\n" +
+                                "/Downloads/TrueLarge/models\n\n" +
+                                "Then click the Refresh button (top right).",
+                                textAlign = TextAlign.Center,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -127,6 +144,7 @@ fun CatalogScreen(
                 LocalModelCard(
                     model = model,
                     onLoad = { onModelSelect(model.path, null) },
+                    onBenchmark = { onBenchmark(model.path) },
                     onDelete = {
                         modelRepository.deleteModel(model.path)
                         localModels = modelRepository.getLocalModels()
@@ -167,6 +185,7 @@ fun CatalogScreen(
 fun LocalModelCard(
     model: LocalModel,
     onLoad: () -> Unit,
+    onBenchmark: () -> Unit,
     onDelete: () -> Unit
 ) {
     Card(
@@ -199,6 +218,13 @@ fun LocalModelCard(
             }
 
             // Actions
+            IconButton(onClick = onBenchmark) {
+                Icon(
+                    Icons.Default.AutoGraph,
+                    contentDescription = "Benchmark",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
             IconButton(onClick = onLoad) {
                 Icon(
                     Icons.Default.PlayArrow,

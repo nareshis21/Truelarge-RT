@@ -292,11 +292,11 @@ std::string TrueLargeRuntime::step() {
     std::string piece = token_to_str(ctx, next_token);
 
     if (generatedTokens.size() == 1) {
-        auto ttft = std::chrono::duration<double, std::milli>(end - t_session_start).count();
-        LOGI("TTFT: %.2f ms", ttft);
+        lastTTFT = std::chrono::duration<double, std::milli>(end - t_session_start).count();
+        LOGI("TTFT: %.2f ms", lastTTFT);
     }
 
-    double tps = generatedTokens.size() / std::chrono::duration<double>(end - t_generation_start).count();
+    lastTPS = generatedTokens.size() / std::chrono::duration<double>(end - t_generation_start).count();
     
     // Telemetry: RAM and CPU
     long rss_kb = getMemoryUsageKB();
@@ -304,13 +304,16 @@ std::string TrueLargeRuntime::step() {
     long freq_hz = getCurrentCpuFreqHz();
     int cpu_id = sched_getcpu();
     
+    lastRAM = rss_kb / 1024; // MB
+    lastCPUFreq = freq_hz / 1e9; // GHz
+
     const char* warning = "";
     if (avail_kb < 512 * 1024) { // Warning if less than 512MB free
         warning = "[LOW-RAM IO-WAIT] ";
     }
 
     LOGI("%sGen: %d -> Token %d ('%s') | Speed: %.2f ms | TPS: %.2f | RAM: %ld MB | CPU: #%d @ %.2f GHz", 
-         warning, (int)generatedTokens.size(), next_token, piece.c_str(), duration, tps, rss_kb / 1024, cpu_id, freq_hz / 1e9);
+         warning, (int)generatedTokens.size(), next_token, piece.c_str(), duration, lastTPS, lastRAM, cpu_id, lastCPUFreq);
 
     return piece;
 }

@@ -23,15 +23,31 @@ class ModelRepository(private val context: Context) {
     }
 
     /**
-     * List all locally downloaded GGUF models.
+     * List all locally downloaded GGUF models from both public and private storage.
      */
     fun getLocalModels(): List<LocalModel> {
-        val dir = getModelsDir()
-        if (!dir.exists()) return emptyList()
+        val publicDir = getModelsDir()
+        val privateDir = context.getExternalFilesDir("models")
+        
+        val allModelFiles = mutableListOf<File>()
+        
+        // 1. Scan public Downloads/TrueLarge/models
+        if (publicDir.exists()) {
+            publicDir.listFiles()
+                ?.filter { it.isFile && it.extension.equals("gguf", ignoreCase = true) }
+                ?.let { allModelFiles.addAll(it) }
+        }
+        
+        // 2. Scan internal Android/data/com.truelarge.runtime/files/models
+        if (privateDir != null && privateDir.exists()) {
+            privateDir.listFiles()
+                ?.filter { it.isFile && it.extension.equals("gguf", ignoreCase = true) }
+                ?.let { allModelFiles.addAll(it) }
+        }
 
-        return dir.listFiles()
-            ?.filter { it.extension.equals("gguf", ignoreCase = true) }
-            ?.map { file ->
+        return allModelFiles
+            .distinctBy { it.absolutePath }
+            .map { file ->
                 LocalModel(
                     name = file.nameWithoutExtension,
                     filename = file.name,
@@ -41,8 +57,7 @@ class ModelRepository(private val context: Context) {
                     downloadDate = file.lastModified()
                 )
             }
-            ?.sortedByDescending { it.downloadDate }
-            ?: emptyList()
+            .sortedByDescending { it.downloadDate }
     }
 
     /**

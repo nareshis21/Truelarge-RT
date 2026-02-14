@@ -36,6 +36,12 @@ public:
     // 6. Release resources
     void release();
 
+    // Benchmark Telemetry (Public for JNI access)
+    double lastTTFT = 0.0;
+    double lastTPS = 0.0;
+    long lastRAM = 0;
+    double lastCPUFreq = 0.0;
+
 private:
     std::string modelPath;
     int nThreads = 4;

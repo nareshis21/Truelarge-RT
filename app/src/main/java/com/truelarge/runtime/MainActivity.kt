@@ -23,6 +23,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.truelarge.runtime.ui.BenchmarkScreen
+import java.net.URLDecoder
+import java.net.URLEncoder
 import com.truelarge.runtime.data.ModelRepository
 import com.truelarge.runtime.download.ModelDownloadManager
 import com.truelarge.runtime.ui.AirTheme
@@ -31,8 +34,10 @@ import com.truelarge.runtime.ui.SearchScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.URLDecoder
-import java.net.URLEncoder
+
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 
 class MainActivity : ComponentActivity() {
 
@@ -69,8 +74,16 @@ class MainActivity : ComponentActivity() {
     private fun requestStoragePermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!Environment.isExternalStorageManager()) {
-                // For Android 11+, we need MANAGE_EXTERNAL_STORAGE
-                // For simplicity, we'll use Downloads directory which doesn't need it
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                    intent.addCategory("android.intent.category.DEFAULT")
+                    intent.data = Uri.parse("package:${packageName}")
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    val intent = Intent()
+                    intent.action = Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION
+                    startActivity(intent)
+                }
             }
         } else {
             val perms = arrayOf(
@@ -114,7 +127,27 @@ fun AppNavigation(
                 onRecommendedClick = { repoId ->
                     val encoded = URLEncoder.encode(repoId, "UTF-8")
                     navController.navigate("search?repoId=$encoded")
+                },
+                onBenchmark = { path ->
+                    val encoded = URLEncoder.encode(path, "UTF-8")
+                    navController.navigate("benchmark/$encoded")
                 }
+            )
+        }
+
+        composable(
+            route = "benchmark/{modelPath}",
+            arguments = listOf(
+                navArgument("modelPath") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val encodedPath = backStackEntry.arguments?.getString("modelPath") ?: ""
+            val modelPath = URLDecoder.decode(encodedPath, "UTF-8")
+            
+            BenchmarkScreen(
+                engine = engine,
+                modelPath = modelPath,
+                onBack = { navController.popBackStack() }
             )
         }
 

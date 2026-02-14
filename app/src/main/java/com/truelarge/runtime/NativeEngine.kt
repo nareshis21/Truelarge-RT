@@ -17,4 +17,5 @@ class NativeEngine {
     external fun release()
     external fun getContextTrain(): Int
     external fun getContextCurrent(): Int
+    external fun getBenchmarkData(): String
 }

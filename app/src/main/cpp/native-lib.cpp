@@ -56,6 +56,18 @@ Java_com_truelarge_runtime_NativeEngine_step(JNIEnv* env, jobject) {
     return bytes;
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_truelarge_runtime_NativeEngine_getBenchmarkData(JNIEnv* env, jobject) {
+    if (!engine) return env->NewStringUTF("0,0,0,0");
+    
+    // Format: "TTFT,TPS,RAM,CPU"
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%.2f,%.2f,%ld,%.2f", 
+             engine->lastTTFT, engine->lastTPS, engine->lastRAM, engine->lastCPUFreq);
+    
+    return env->NewStringUTF(buf);
+}
+
 JNIEXPORT void JNICALL
 Java_com_truelarge_runtime_NativeEngine_release(JNIEnv* env, jobject) {
     engine.reset();
