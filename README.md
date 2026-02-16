@@ -6,9 +6,10 @@ TrueLarge-RT is a native Android inference engine built on top of `llama.cpp`. I
 
 ## Key Features
 
-- **Native llama.cpp Integration**: Pure C++ core for maximum performance and low-level hardware optimization.
+- **Native llama.cpp Integration**: Pure C++ core with **ARM DotProd** acceleration for 2x-4x faster math on modern SoCs.
 - **Professional-Grade Benchmarking**: 5-question standardized suite with millisecond-precision TTFT (Time To First Token), and statistical TPS (Avg/Peak/Low/Median) tracking.
 - **Real-Time Telemetry Graphs**: Live visualization of inference speed, memory footprint (RSS MB), and CPU clock frequency (GHz) with visual per-question dividers.
+- **Surgical CPU Pinning**: Intelligent affinity mapping that targets ultra-performance cores for generation to maximize sustained TPS.
 - **Auto-Discovery**: Automatically recognizes manually added GGUF models in `/Downloads/TrueLarge/models`.
 - **Smart Memory Management**: Dynamic `mlock` support and RAM-aware loading to prevent OOM crashes.
 - **Multi-Turn Persistence**: Optimized KV cache management for fast, conversational multi-turn inference.
