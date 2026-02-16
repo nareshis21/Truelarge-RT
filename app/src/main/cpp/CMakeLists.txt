@@ -5,6 +5,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_BUILD_TYPE Release)
 add_compile_options(-O3 -ffast-math -fno-finite-math-only)
 
+# Optimization: Enable ARM DotProd for modern Android SoCs (Snapdragon 855+)
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+    add_compile_options(-march=armv8.2-a+dotprod)
+    message(STATUS "Native Optimization: ARM DotProd enabled")
+endif()
+
 # Directory pointing to llama.cpp source (now in the same directory)
 set(LLAMA_CPP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp)
 
