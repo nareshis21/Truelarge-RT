@@ -93,6 +93,10 @@ void GGUFHeaderParser::skipValue(uint32_t type, size_t& offset) {
     }
 }
 
+// ... (imports remain)
+
+    // ... (rest of methods)
+
 bool GGUFHeaderParser::parse() {
     try {
         fd = open(modelPath.c_str(), O_RDONLY);
@@ -144,35 +148,48 @@ bool GGUFHeaderParser::parse() {
             std::string name = readString(offset);
             uint32_t n_dims = read<uint32_t>(offset);
             
+            std::vector<int64_t> dims;
             uint64_t n_elements = 1;
             for (uint32_t j = 0; j < n_dims; ++j) {
-                n_elements *= read<uint64_t>(offset);
+                uint64_t dim = read<uint64_t>(offset);
+                dims.push_back(dim);
+                n_elements *= dim;
             }
             
             uint32_t type = read<uint32_t>(offset); // ggml_type
             uint64_t tensorOffset = read<uint64_t>(offset);
             
-            int layerIdx = extractLayerIndex(name);
-            if (layerIdx >= 0) {
-                LayerInfo info;
-                info.offset = tensorOffset;
+            std::string suffix;
+            int layerIdx = parseTensorName(name, suffix);
+            
+            // Allow globals (index -1)
+            if (layerIdx >= -1) {
+                TensorInfo info;
                 info.name = name;
+                info.offset = tensorOffset; // Relative to data start
+                info.dims = dims;
+                info.type = type;
                 
                 // Calculate size using ggml logic
-                // Ensure we handle block sizes for quantized types
-                // We trust ggml values here.
-                // Note: type is ggml_type enum.
-                
                 size_t type_size = ggml_type_size((ggml_type)type);
                 int64_t blck_size = ggml_blck_size((ggml_type)type);
                 
                 if (blck_size > 0) {
+                     // Using integer arithmetic closely matches implementation
+                     // Usually: elements * type_size / block_size
+                     // NOTE: n_elements for quantized types (like Q4_K) is the number of "superblocks"? 
+                     // No, n_elements is logical elements (parameters).
+                     // ggml_type_size is bytes per block.
+                     // ggml_blck_size is elements per block.
+                     // size = (n_elements / blck_size) * type_size
                      info.size = (n_elements * type_size) / blck_size;
                 } else {
-                     info.size = 0; // Should not happen for valid types
+                     info.size = 0; 
                 }
 
-                layerMap[layerIdx] = info;
+                // Append to layer info
+                layerMap[layerIdx].index = layerIdx;
+                layerMap[layerIdx].tensors[suffix] = info;
             }
         }
         
@@ -187,8 +204,10 @@ bool GGUFHeaderParser::parse() {
         
         // Now update all absolute offsets
         size_t dataStart = offset;
-        for (auto& pair : layerMap) {
-            pair.second.offset += dataStart;
+        for (auto& layerPair : layerMap) {
+            for (auto& tensorPair : layerPair.second.tensors) {
+                tensorPair.second.offset += dataStart;
+            }
         }
 
         return true;
@@ -199,23 +218,31 @@ bool GGUFHeaderParser::parse() {
     }
 }
 
-int GGUFHeaderParser::extractLayerIndex(const std::string& name) {
+int GGUFHeaderParser::parseTensorName(const std::string& name, std::string& suffix) {
+    // Expected format: blk.N.suffix
+    // If not, returns -1 and suffix = name (Global)
     size_t run = name.find("blk.");
     if (run != std::string::npos) {
-        size_t end = name.find('.', run + 4);
-        if (end != std::string::npos) {
-            std::string num = name.substr(run + 4, end - (run + 4));
+        size_t startNum = run + 4;
+        size_t endNum = name.find('.', startNum);
+        if (endNum != std::string::npos) {
+            std::string num = name.substr(startNum, endNum - startNum);
             try {
-                return std::stoi(num);
+                int index = std::stoi(num);
+                suffix = name.substr(endNum + 1); // everything after "blk.N."
+                return index;
             } catch (...) {
-                return -1;
+                // Fallthrough
             }
         }
     }
+    
+    // Global tensor
+    suffix = name;
     return -1;
 }
 
-const LayerInfo* GGUFHeaderParser::getLayerInfo(int layerIndex) const {
+const LayerSourceInfo* GGUFHeaderParser::getLayerSourceInfo(int layerIndex) const {
     auto it = layerMap.find(layerIndex);
     if (it != layerMap.end()) {
         return &it->second;
@@ -229,7 +256,9 @@ int GGUFHeaderParser::getLayerCount() const {
 
 void GGUFHeaderParser::printLayerMap() const {
     for (const auto& pair : layerMap) {
-        std::cout << "Layer " << pair.first << ": Offset " << pair.second.offset 
-                  << " (" << pair.second.name << ")" << std::endl;
+        std::cout << "Layer " << pair.first << " has " << pair.second.tensors.size() << " tensors." << std::endl;
+        for (const auto& tp : pair.second.tensors) {
+             std::cout << "  - " << tp.first << " (" << tp.second.size << " bytes)" << std::endl;
+        }
     }
 }

@@ -31,11 +31,12 @@ import kotlinx.coroutines.withContext
 
 data class BenchmarkResult(
     val tokenIndex: Int,
-    val tokenText: String, // Added this
+    val tokenText: String,
     val ttft: Double,
     val tps: Double,
     val ramMB: Long,
-    val cpuGHz: Double
+    val cpuGHz: Double,
+    val totalTime: Double
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -104,22 +105,33 @@ fun BenchmarkScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             if (results.isNotEmpty()) {
-                // Real-time Data Visualization
-                Card(
-                    modifier = Modifier.fillMaxWidth().height(250.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.05f))
-                ) {
-                    Column(Modifier.padding(8.dp)) {
-                        Text("TPS & RAM Tracking", style = MaterialTheme.typography.labelSmall)
-                        PerformanceGraph(results)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Detailed Log
-                Text("Token Step Log", style = MaterialTheme.typography.titleSmall)
+                // Multi-Graph Visualization
                 LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                    item {
+                        TelemetryGraph("TTFT (Seconds)", results, { it.ttft.toFloat() }, Color(0xFFFF5722), 10f)
+                        Spacer(Modifier.height(16.dp))
+                    }
+                    item {
+                        TelemetryGraph("TPS (Tokens/Sec)", results, { it.tps.toFloat() }, Color(0xFF4CAF50), 20f)
+                        Spacer(Modifier.height(16.dp))
+                    }
+                    item {
+                        TelemetryGraph("Total Question Time (Sec)", results, { it.totalTime.toFloat() }, Color(0xFFFFC107), 30f)
+                        Spacer(Modifier.height(16.dp))
+                    }
+                    item {
+                        TelemetryGraph("CPU Frequency (GHz)", results, { it.cpuGHz.toFloat() }, Color(0xFF9C27B0), 3.5f)
+                        Spacer(Modifier.height(16.dp))
+                    }
+                    item {
+                        TelemetryGraph("RAM Usage (MB)", results, { it.ramMB.toFloat() }, Color(0xFF2196F3), 6000f)
+                        Spacer(Modifier.height(16.dp))
+                    }
+                    
+                    item {
+                        Text("Token Step Log", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+                    }
+                    
                     items(results.reversed()) { res ->
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -127,7 +139,7 @@ fun BenchmarkScreen(
                         ) {
                             Text("T${res.tokenIndex}", fontWeight = FontWeight.Bold, modifier = Modifier.width(40.dp))
                             Text("'${res.tokenText}'", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(horizontal = 4.dp), maxLines = 1)
-                            Text("${"%.2f".format(res.tps)} TPS ", style = MaterialTheme.typography.labelSmall)
+                            Text("${"%.2f".format(res.tps)}t/s", style = MaterialTheme.typography.labelSmall)
                             Text("${res.ramMB}MB", style = MaterialTheme.typography.labelSmall)
                         }
                         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
@@ -143,80 +155,58 @@ fun BenchmarkScreen(
 }
 
 @Composable
-fun PerformanceGraph(results: List<BenchmarkResult>) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        // Legend Overlay
-        Row(
-            modifier = Modifier
-                .padding(8.dp)
-                .align(Alignment.TopEnd)
-                .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(Modifier.size(8.dp).background(Color(0xFF4CAF50), RoundedCornerShape(2.dp)))
-            Text(" TPS ", style = MaterialTheme.typography.labelSmall, color = Color.White)
-            Spacer(Modifier.width(8.dp))
-            Box(Modifier.size(8.dp).background(Color(0xFF2196F3), RoundedCornerShape(2.dp)))
-            Text(" RAM", style = MaterialTheme.typography.labelSmall, color = Color.White)
-        }
-
-        // Axis Scale Labels
-        Column(
-            modifier = Modifier.fillMaxHeight().padding(start = 4.dp, top = 24.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("10", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-            Text("5", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-            Text("0", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-        }
-
-        Canvas(modifier = Modifier.fillMaxSize().padding(start = 24.dp, end = 16.dp, top = 24.dp, bottom = 24.dp)) {
-            if (results.isEmpty()) return@Canvas
-
-            val width = size.width
-            val height = size.height
-            val maxTokens = 50f
-            val maxTps = 10f
-            val maxRam = 4000f // Scaling for 4GB
-
-            fun xPos(index: Int) = (index / maxTokens) * width
-            fun yPosTps(tps: Double) = height - (tps.coerceIn(0.0, 10.0).toFloat() / maxTps) * height
-            fun yPosRam(ram: Long) = height - (ram.coerceIn(0, 4000).toFloat() / maxRam) * height
-
-            // 1. Draw Grid
-            val gridColor = Color.White.copy(alpha = 0.1f)
-            for (i in 0..4) {
-                val y = height - (i / 4f) * height
-                drawLine(gridColor, Offset(0f, y), Offset(width, y), strokeWidth = 1f)
+fun TelemetryGraph(
+    label: String,
+    results: List<BenchmarkResult>,
+    valueSelector: (BenchmarkResult) -> Float,
+    lineColor: Color,
+    maxValue: Float
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().height(160.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.05f))
+    ) {
+        Column(Modifier.padding(8.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                val lastVal = results.lastOrNull()?.let { valueSelector(it) } ?: 0f
+                Text(String.format("%.2f", lastVal), style = MaterialTheme.typography.labelSmall, color = lineColor)
             }
-            for (i in 0..5) {
-                val x = (i / 5f) * width
-                drawLine(gridColor, Offset(x, 0f), Offset(x, height), strokeWidth = 1f)
-            }
-
-            // 2. Draw Paths
-            val tpsPath = Path().apply {
-                results.forEachIndexed { i, res ->
-                    val x = xPos(res.tokenIndex)
-                    val y = yPosTps(res.tps)
-                    if (i == 0) moveTo(x, y) else lineTo(x, y)
-                }
-            }
-            drawPath(tpsPath, Color(0xFF4CAF50), style = Stroke(width = 4f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-
-            val ramPath = Path().apply {
-                results.forEachIndexed { i, res ->
-                    val x = xPos(res.tokenIndex)
-                    val y = yPosRam(res.ramMB)
-                    if (i == 0) moveTo(x, y) else lineTo(x, y)
-                }
-            }
-            drawPath(ramPath, Color(0xFF2196F3), style = Stroke(width = 4f, cap = StrokeCap.Round, join = StrokeJoin.Round))
             
-            // 3. Draw Axis Lines
-            drawLine(Color.Gray, Offset(0f, height), Offset(width, height), strokeWidth = 2f)
-            drawLine(Color.Gray, Offset(0f, 0f), Offset(0f, height), strokeWidth = 2f)
+            Box(Modifier.fillMaxSize()) {
+                Canvas(modifier = Modifier.fillMaxSize().padding(top = 16.dp, bottom = 8.dp)) {
+                    val width = size.width
+                    val height = size.height
+                    val maxTokens = 50f 
+
+                    fun xPos(index: Int) = (index / maxTokens) * width
+                    fun yPos(value: Float) = height - (value.coerceIn(0f, maxValue) / maxValue) * height
+
+                    // Grid
+                    val gridColor = Color.White.copy(alpha = 0.05f)
+                    drawLine(gridColor, Offset(0f, height/2), Offset(width, height/2), strokeWidth = 1f)
+
+                    // Path
+                    if (results.isNotEmpty()) {
+                        val path = Path().apply {
+                            results.forEachIndexed { i, res ->
+                                val x = xPos(res.tokenIndex)
+                                val y = yPos(valueSelector(res))
+                                if (i == 0) moveTo(x, y) else lineTo(x, y)
+                            }
+                        }
+                        drawPath(
+                            path, 
+                            lineColor, 
+                            style = Stroke(width = 3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        )
+                    }
+                    
+                    // Axis
+                    drawLine(Color.Gray.copy(alpha = 0.3f), Offset(0f, height), Offset(width, height), strokeWidth = 1f)
+                    drawLine(Color.Gray.copy(alpha = 0.3f), Offset(0f, 0f), Offset(0f, height), strokeWidth = 1f)
+                }
+            }
         }
     }
 }
@@ -271,14 +261,15 @@ suspend fun runBenchmark(
                 
                 val rawCsv = engine.getBenchmarkData()
                 val parts = rawCsv.split(",")
-                if (parts.size == 4) {
+                if (parts.size >= 5) {
                     val res = BenchmarkResult(
                         tokenIndex = globalTokenCount,
                         tokenText = piece,
                         ttft = parts[0].toDoubleOrNull() ?: 0.0,
                         tps = parts[1].toDoubleOrNull() ?: 0.0,
                         ramMB = parts[2].toLongOrNull() ?: 0,
-                        cpuGHz = parts[3].toDoubleOrNull() ?: 0.0
+                        cpuGHz = parts[3].toDoubleOrNull() ?: 0.0,
+                        totalTime = parts[4].toDoubleOrNull() ?: 0.0
                     )
                     withContext(Dispatchers.Main) {
                         onResult(res)

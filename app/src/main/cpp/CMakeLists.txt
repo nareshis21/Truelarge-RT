@@ -28,6 +28,8 @@ include_directories(${LLAMA_CPP_DIR}/ggml/include)
 set(ENGINE_SOURCES
     GGUFHeaderParser.cpp
     LayerLoader.cpp
+    LayerScheduler.cpp
+    WeightBuffer.cpp
     TrueLargeRuntime.cpp
     native-lib.cpp
 )

@@ -20,6 +20,23 @@ TrueLarge-RT is optimized to run large models (7B - 13B) even on constrained har
 - **KV Cache Capping**: Caps context buffers to 2048 tokens to maintain a stable memory footprint.
 - **CPU Affinity**: Intelligent thread mapping to "Big" performance cores to minimize latency during memory swaps.
 
+## Architecture: Hybrid Loading Strategy
+
+TrueLarge-RT employs a unique 3-tier loading strategy to enable large models (up to 13B+) on mobile devices with limited RAM (4GB-8GB):
+
+![Architecture Diagram](https://raw.githubusercontent.com/nareshis21/Truelarge-RT/main/docs/architecture_hybrid.png)
+
+1.  **Full RAM (mlock)**:
+    - **Trigger**: `Free RAM > Model Size + 1GB`.
+    - **Behavior**: Locks the entire model in memory to prevent swapping. Delivers maximum speed.
+2.  **OS Paging (mmap)**:
+    - **Trigger**: `Free RAM > 75% of Model Size`.
+    - **Behavior**: Uses standard memory mapping. The OS handles paging pages in/out as needed. This is efficient for models that *mostly* fit in RAM.
+3.  **Layer-by-Layer (LBL)**:
+    - **Trigger**: `Free RAM < 75% of Model Size`.
+    - **Behavior**: Loads one layer at a time from storage, computes, and unloads.
+    - **Benefit**: Runs huge models (e.g., 7B on 3GB RAM) that would otherwise crash. Slower, but enables inference on constrained hardware.
+
 ## Comparison with Other Runtimes
 
 | Feature | TrueLarge-RT | SmolChat | ONNX Runtime | Google AICore |
@@ -32,6 +49,10 @@ TrueLarge-RT is optimized to run large models (7B - 13B) even on constrained har
 
 ### Why TrueLarge-RT?
 Unlike general-purpose runtimes like **ONNX**, TrueLarge-RT is laser-focused on the GGUF ecosystem, leveraging `llama.cpp`'s highly optimized ARM NEON and DotProd kernels. Compared to **AICore**, it offers complete freedom—allowing researchers and developers to run any model (Qwen, Llama, Phi, Mistral) without proprietary restrictions.
+
+## Mobile Performance
+
+*Benchmarks pending. Currently testing on Snapdragon 8 Gen 2 / Gen 3 devices.*
 
 ## Getting Started
 

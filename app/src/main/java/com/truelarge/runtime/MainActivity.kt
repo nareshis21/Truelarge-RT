@@ -38,7 +38,16 @@ import kotlinx.coroutines.withContext
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.items
 
+import java.util.UUID
+
+data class ChatMessage(
+    val role: String,
+    var content: String,
+    val id: String = UUID.randomUUID().toString()
+)
 class MainActivity : ComponentActivity() {
 
     private val engine = NativeEngine()
@@ -205,8 +214,11 @@ fun InferenceScreen(
 ) {
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf("Ready") }
-    var output by remember { mutableStateOf("") }
-    var chatHistory by remember { mutableStateOf(listOf<Pair<String, String>>()) }
+    
+    // Unified Message List - Single Source of Truth
+    val messages = remember { mutableStateListOf<ChatMessage>() }
+    val listState = rememberLazyListState()
+    
     var isRunning by remember { mutableStateOf(false) }
     var isGenerating by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf("") }
@@ -257,10 +269,9 @@ fun InferenceScreen(
                     }
                 },
                 actions = {
-                    if (chatHistory.isNotEmpty() || output.isNotEmpty()) {
+                    if (messages.isNotEmpty()) {
                         TextButton(onClick = {
-                            chatHistory = emptyList()
-                            output = ""
+                            messages.clear()
                             status = "Session cleared"
                             scope.launch {
                                 withContext(Dispatchers.IO) {
@@ -310,39 +321,49 @@ fun InferenceScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Chat History Area
-            if (chatHistory.isNotEmpty() || output.isNotEmpty() || isGenerating) {
+            if (messages.isNotEmpty()) {
                 Card(
                     modifier = Modifier.fillMaxWidth().weight(1f).padding(vertical = 8.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                 ) {
                     androidx.compose.foundation.lazy.LazyColumn(
+                        state = listState,
                         modifier = Modifier.padding(8.dp).fillMaxWidth(),
                         reverseLayout = false
                     ) {
-                        items(chatHistory.size) { index ->
-                            val (q, a) = chatHistory[index]
+                        items(
+                            items = messages,
+                            key = { it.id }
+                        ) { msg ->
                             Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                                Text("User: $q", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-                                Text("AI: $a", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    text = "${msg.role}:", 
+                                    fontWeight = FontWeight.Bold, 
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (msg.role == "User") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                                )
+                                Text(
+                                    text = msg.content, 
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
                                 HorizontalDivider(
                                     modifier = Modifier.padding(top = 8.dp),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f)
                                 )
                             }
                         }
-                        if (isGenerating || output.isNotEmpty()) {
-                            item {
-                                Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                                    Text("User: ${if (isGenerating && prompt.isNotEmpty()) prompt else chatHistory.lastOrNull()?.first ?: ""}",
-                                        fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-                                    Text("AI: $output", style = MaterialTheme.typography.bodyMedium)
-                                }
-                            }
+                    }
+                    // Auto-scroll to bottom on new token
+                    LaunchedEffect(messages.lastOrNull()?.content?.length) {
+                        if (messages.isNotEmpty()) {
+                            listState.animateScrollToItem(messages.size - 1)
                         }
                     }
                 }
             } else {
-                Spacer(modifier = Modifier.weight(1f))
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    Text("Start a conversation...", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
 
             // Prompt input
@@ -373,18 +394,35 @@ fun InferenceScreen(
                     Button(
                         onClick = {
                             val currentPrompt = prompt
+                            prompt = "" // Clear input immediately
+                            
                             scope.launch {
+                                // Add messages to UI
+                                messages.add(ChatMessage("User", currentPrompt))
+                                val aiMsg = ChatMessage("AI", "")
+                                messages.add(aiMsg)
+                                
                                 isGenerating = true
                                 status = "Running inference..."
                                 tps = 0.0
-                                val finalOutput = withContext(Dispatchers.IO) {
+                                
+                                val keepHistory = messages.size > 2
+                                // System Prompt Injection
+                                val promptToSend = if (!keepHistory) {
+                                    "System: You are a helpful AI assistant. Answer concisely.\n\nUser: $currentPrompt\nAI:"
+                                } else {
+                                    "User: $currentPrompt\nAI:"
+                                }
+
+                                withContext(Dispatchers.IO) {
                                     engine.configureSampler(temperature, 40, topP)
-                                    val ok = engine.createSession(currentPrompt, chatHistory.isNotEmpty())
+                                    val ok = engine.createSession(promptToSend, keepHistory) // Use history if continuing
+                                    
                                     if (ok) {
-                                        val sb = StringBuilder()
                                         var tokenCount = 0
                                         val startTime = System.currentTimeMillis()
                                         val responseBytes = mutableListOf<Byte>()
+                                        
                                         for (i in 0 until maxTokens.toInt()) {
                                             if (!isGenerating) break
                                             val pieceBytes = engine.step()
@@ -396,19 +434,18 @@ fun InferenceScreen(
                                             val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
                                             
                                             withContext(Dispatchers.Main) {
-                                                output = currentString
+                                                // Update the LAST message (AI) in place
+                                                // Trigger recomposition by replacing the item or using mutable state inside?
+                                                // For SnapshotStateList, setting item at index works.
+                                                if (messages.isNotEmpty()) {
+                                                    messages[messages.lastIndex] = aiMsg.copy(content = currentString)
+                                                }
                                                 if (elapsed > 0) tps = tokenCount / elapsed
                                             }
                                         }
-                                        sb.toString()
-                                    } else null
+                                    }
                                 }
                                 withContext(Dispatchers.Main) {
-                                    if (finalOutput != null) {
-                                        chatHistory = chatHistory + (currentPrompt to finalOutput)
-                                        output = ""
-                                        prompt = ""
-                                    }
                                     status = "Done"
                                     isGenerating = false
                                 }

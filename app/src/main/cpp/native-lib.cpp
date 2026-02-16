@@ -2,15 +2,18 @@
 #include <string>
 #include "TrueLargeRuntime.h"
 #include <android/log.h>
+#include <mutex>
 
 // Global instance (Simple singleton for POC)
 // In production, manage this via a Handle passed to Java
 static std::unique_ptr<TrueLargeRuntime> engine;
+static std::mutex engine_mutex; // Serialize all native calls
 
 extern "C" {
 
 JNIEXPORT jboolean JNICALL
 Java_com_truelarge_runtime_NativeEngine_init(JNIEnv* env, jobject, jstring modelPath, jint threads, jint gpuLayers) {
+    std::lock_guard<std::mutex> lock(engine_mutex);
     const char* cPath = env->GetStringUTFChars(modelPath, nullptr);
     std::string path(cPath);
     env->ReleaseStringUTFChars(modelPath, cPath);
@@ -29,6 +32,7 @@ Java_com_truelarge_runtime_NativeEngine_init(JNIEnv* env, jobject, jstring model
 
 JNIEXPORT jboolean JNICALL
 Java_com_truelarge_runtime_NativeEngine_createSession(JNIEnv* env, jobject, jstring prompt, jboolean keepHistory) {
+    std::lock_guard<std::mutex> lock(engine_mutex);
     if (!engine) return JNI_FALSE;
 
     const char* cPrompt = env->GetStringUTFChars(prompt, nullptr);
@@ -40,6 +44,7 @@ Java_com_truelarge_runtime_NativeEngine_createSession(JNIEnv* env, jobject, jstr
 
 JNIEXPORT void JNICALL
 Java_com_truelarge_runtime_NativeEngine_configureSampler(JNIEnv* env, jobject, jfloat temp, jint k, jfloat p) {
+    std::lock_guard<std::mutex> lock(engine_mutex);
     if (engine) {
         engine->configureSampler(temp, k, p);
     }
@@ -47,6 +52,7 @@ Java_com_truelarge_runtime_NativeEngine_configureSampler(JNIEnv* env, jobject, j
 
 JNIEXPORT jbyteArray JNICALL
 Java_com_truelarge_runtime_NativeEngine_step(JNIEnv* env, jobject) {
+    std::lock_guard<std::mutex> lock(engine_mutex);
     if (!engine) return nullptr;
     std::string piece = engine->step();
     if (piece.empty()) return nullptr;
@@ -60,16 +66,17 @@ JNIEXPORT jstring JNICALL
 Java_com_truelarge_runtime_NativeEngine_getBenchmarkData(JNIEnv* env, jobject) {
     if (!engine) return env->NewStringUTF("0,0,0,0");
     
-    // Format: "TTFT,TPS,RAM,CPU"
+    // Format: "TTFT,TPS,RAM,CPU,TotalTime"
     char buf[128];
-    snprintf(buf, sizeof(buf), "%.2f,%.2f,%ld,%.2f", 
-             engine->lastTTFT, engine->lastTPS, engine->lastRAM, engine->lastCPUFreq);
+    snprintf(buf, sizeof(buf), "%.2f,%.2f,%ld,%.2f,%.2f", 
+             engine->lastTTFT, engine->lastTPS, engine->lastRAM, engine->lastCPUFreq, engine->lastTotalTime);
     
     return env->NewStringUTF(buf);
 }
 
 JNIEXPORT void JNICALL
 Java_com_truelarge_runtime_NativeEngine_release(JNIEnv* env, jobject) {
+    std::lock_guard<std::mutex> lock(engine_mutex);
     engine.reset();
 }
 
