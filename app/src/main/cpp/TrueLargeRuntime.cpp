@@ -61,22 +61,15 @@ long getCurrentCpuFreqHz() {
 }
 
 // Helper to set CPU affinity (prefer big cores)
-void set_cpu_affinity(bool prime_only = false) {
+void set_cpu_affinity() {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     int n_cores = sysconf(_SC_NPROCESSORS_CONF);
-    
-    if (prime_only) {
-        // Pin ONLY to the very last core (Core 7 on most modern Android SoCs)
-        CPU_SET(n_cores - 1, &cpuset);
-        LOGI("CPU Affinity: Pinning to Prime Core (%d)", n_cores - 1);
-    } else {
-        // Prefer the last 4 cores (Big cores like Cortex-X or A7xx)
-        for (int i = std::max(0, n_cores - 4); i < n_cores; i++) {
-            CPU_SET(i, &cpuset);
-        }
+    // Prefer the last 4 cores (usually Big cores like Cortex-X or A7xx on Android)
+    // Most octa-core chips have 4 big cores at the higher indices.
+    for (int i = std::max(0, n_cores - 4); i < n_cores; i++) {
+        CPU_SET(i, &cpuset);
     }
-    
     if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) != 0) {
         LOGE("Failed to set CPU affinity");
     }
@@ -200,7 +193,7 @@ static bool g_batch_init = false;
 
 bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory) {
     t_session_start = std::chrono::steady_clock::now();
-    set_cpu_affinity(false); // Pin to all Big cores for Pre-fill (parallel)
+    set_cpu_affinity(); // Pin to big cores for this session
     if (!model || !ctx) {
         LOGE("Model not loaded");
         return false;
@@ -435,9 +428,6 @@ std::string TrueLargeRuntime::step() {
     if (useLayerByLayer) {
         return step_lbl();
     }
-
-    // Surgical Pinning: Use Prime Core only for sequential generation
-    set_cpu_affinity(true); 
 
     // Fallback: Normal single-token inference
     llama_token next_token = llama_sampler_sample(sampler, ctx, -1);
