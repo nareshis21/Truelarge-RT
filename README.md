@@ -68,3 +68,16 @@ Unlike general-purpose runtimes like **ONNX**, TrueLarge-RT is laser-focused on 
 
 ## License
 MIT License. Built for the open-source LLM community.
+
+## Citation
+
+If you use TrueLarge-RT in your research or project, please cite:
+
+```bibtex
+@software{TrueLargeRT2026,
+  author = {Lahajal, Naresh Kumar},
+  title = {TrueLarge-RT: High-Performance GGUF Runtime for Android},
+  year = {2026},
+  url = {https://github.com/nareshis21/Truelarge-RT}
+}
+```
