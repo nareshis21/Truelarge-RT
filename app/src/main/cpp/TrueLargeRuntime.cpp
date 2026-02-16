@@ -354,8 +354,7 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
             ggml_graph_compute_with_ctx(ctx_pong, gf, nThreads);
             
             // DIAGNOSTIC REMOVED
-            
-            // Dependency cut: copy result into pong as a leaf, then swap
+
             struct ggml_tensor* result_leaf = ggml_new_tensor(ctx_pong, out->type, ggml_n_dims(out), out->ne);
             memcpy(result_leaf->data, out->data, ggml_nbytes(out));
             input = result_leaf;
@@ -462,6 +461,7 @@ std::string TrueLargeRuntime::step() {
     }
 
     lastTPS = generatedTokens.size() / std::chrono::duration<double>(end - t_generation_start).count();
+    lastTotalTime = std::chrono::duration<double>(end - t_session_start).count();
     
     // Telemetry: RAM and CPU
     long rss_kb = getMemoryUsageKB();

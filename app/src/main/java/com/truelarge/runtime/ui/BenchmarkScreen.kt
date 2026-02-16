@@ -31,11 +31,25 @@ import kotlinx.coroutines.withContext
 
 data class BenchmarkResult(
     val tokenIndex: Int,
+    val questionIndex: Int,
     val tokenText: String,
     val ttft: Double,
     val tps: Double,
     val ramMB: Long,
     val cpuGHz: Double,
+    val totalTime: Double
+)
+
+data class QuestionSummary(
+    val questionIndex: Int,
+    val questionText: String,
+    val avgTps: Double,
+    val maxTps: Double,
+    val minTps: Double,
+    val medianTps: Double,
+    val ttft: Double,
+    val peakRamMB: Long,
+    val avgCpuGHz: Double,
     val totalTime: Double
 )
 
@@ -50,6 +64,8 @@ fun BenchmarkScreen(
     var isRunning by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf(listOf<BenchmarkResult>()) }
     var status by remember { mutableStateOf("Ready to Benchmark") }
+    
+    var questionSummaries by remember { mutableStateOf(listOf<QuestionSummary>()) }
     
     val modelName = remember(modelPath) {
         modelPath.substringAfterLast("/").substringAfterLast("\\")
@@ -84,10 +100,18 @@ fun BenchmarkScreen(
                     if (!isRunning) {
                         Button(
                             onClick = {
+                                // Reset logic
+                                results = emptyList()
+                                questionSummaries = emptyList()
                                 scope.launch {
-                                    runBenchmark(engine, modelPath, { status = it }, { 
-                                        results = results + it 
-                                    }, { isRunning = it })
+                                    runBenchmark(
+                                        engine, 
+                                        modelPath, 
+                                        { status = it }, 
+                                        { results = results + it },
+                                        { questionSummaries = questionSummaries + it },
+                                        { isRunning = it }
+                                    )
                                 }
                             },
                             modifier = Modifier.padding(top = 8.dp).fillMaxWidth()
@@ -97,22 +121,81 @@ fun BenchmarkScreen(
                             Text("Start 5-Question Benchmark")
                         }
                     } else {
-                        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp))
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (results.isNotEmpty()) {
+            if (results.isNotEmpty() || questionSummaries.isNotEmpty()) {
                 // Multi-Graph Visualization
                 LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                    if (questionSummaries.isNotEmpty()) {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text("Overall Performance", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                    Spacer(Modifier.height(8.dp))
+                                    val avgTps = questionSummaries.map { it.avgTps }.average()
+                                    val avgTtft = questionSummaries.map { it.ttft }.average()
+                                    val peakRam = questionSummaries.maxOf { it.peakRamMB }
+                                    val avgCpu = questionSummaries.map { it.avgCpuGHz }.average()
+                                    
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Column {
+                                            Text("Avg TPS", style = MaterialTheme.typography.labelSmall)
+                                            Text("%.2f t/s".format(avgTps), fontWeight = FontWeight.Bold)
+                                        }
+                                        Column {
+                                            Text("Avg TTFT", style = MaterialTheme.typography.labelSmall)
+                                            Text("%.1f ms".format(avgTtft), fontWeight = FontWeight.Bold)
+                                        }
+                                        Column {
+                                            Text("Peak RAM", style = MaterialTheme.typography.labelSmall)
+                                            Text("${peakRam}MB", fontWeight = FontWeight.Bold)
+                                        }
+                                        Column {
+                                            Text("Avg CPU", style = MaterialTheme.typography.labelSmall)
+                                            Text("%.2f GHz".format(avgCpu), fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        item {
+                            Text("Per-Question Summary", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 8.dp))
+                            questionSummaries.forEach { summary ->
+                                Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                    Column(Modifier.padding(12.dp)) {
+                                        Text("Q${summary.questionIndex + 1}: ${summary.questionText}", style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("Avg: %.1f".format(summary.avgTps), style = MaterialTheme.typography.labelSmall)
+                                            Text("Max: %.1f".format(summary.maxTps), style = MaterialTheme.typography.labelSmall)
+                                            Text("Min: %.1f".format(summary.minTps), style = MaterialTheme.typography.labelSmall)
+                                            Text("Med: %.1f".format(summary.medianTps), style = MaterialTheme.typography.labelSmall)
+                                        }
+                                        Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("TTFT: %.1fms".format(summary.ttft), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                            Text("RAM: ${summary.peakRamMB}MB", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                            Text("CPU: %.1fG".format(summary.avgCpuGHz), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(16.dp))
+                        }
+                    }
                     item {
-                        TelemetryGraph("TTFT (Seconds)", results, { it.ttft.toFloat() }, Color(0xFFFF5722), 10f)
+                        TelemetryGraph("TTFT (milliseconds)", results, { it.ttft.toFloat() }, Color(0xFFFF5722), 2000f)
                         Spacer(Modifier.height(16.dp))
                     }
                     item {
-                        TelemetryGraph("TPS (Tokens/Sec)", results, { it.tps.toFloat() }, Color(0xFF4CAF50), 20f)
+                        TelemetryGraph("TPS (Tokens/Sec)", results, { it.tps.toFloat() }, Color(0xFF4CAF50), 100f)
                         Spacer(Modifier.height(16.dp))
                     }
                     item {
@@ -186,6 +269,18 @@ fun TelemetryGraph(
                     val gridColor = Color.White.copy(alpha = 0.05f)
                     drawLine(gridColor, Offset(0f, height/2), Offset(width, height/2), strokeWidth = 1f)
 
+                    // Question Dividers & Labels
+                    val dividerColor = Color.White.copy(alpha = 0.15f)
+                    for (q in 1..4) {
+                        val x = xPos(q * 10)
+                        drawLine(
+                            dividerColor, 
+                            Offset(x, 0f), 
+                            Offset(x, height), 
+                            strokeWidth = 2f
+                        )
+                    }
+
                     // Path
                     if (results.isNotEmpty()) {
                         val path = Path().apply {
@@ -216,6 +311,7 @@ suspend fun runBenchmark(
     modelPath: String,
     onStatus: (String) -> Unit,
     onResult: (BenchmarkResult) -> Unit,
+    onSummary: (QuestionSummary) -> Unit,
     onToggle: (Boolean) -> Unit
 ) {
     val questions = listOf(
@@ -248,6 +344,8 @@ suspend fun runBenchmark(
         Log.i("TRUELARGEPERF", "BENCHMARK QUESTION $qNum: $question")
         
         val finalAnswer = StringBuilder()
+        val questionResults = mutableListOf<BenchmarkResult>()
+        
         withContext(Dispatchers.IO) {
             engine.createSession(question, false) // Fresh session for each question
             
@@ -264,6 +362,7 @@ suspend fun runBenchmark(
                 if (parts.size >= 5) {
                     val res = BenchmarkResult(
                         tokenIndex = globalTokenCount,
+                        questionIndex = qIdx,
                         tokenText = piece,
                         ttft = parts[0].toDoubleOrNull() ?: 0.0,
                         tps = parts[1].toDoubleOrNull() ?: 0.0,
@@ -271,6 +370,7 @@ suspend fun runBenchmark(
                         cpuGHz = parts[3].toDoubleOrNull() ?: 0.0,
                         totalTime = parts[4].toDoubleOrNull() ?: 0.0
                     )
+                    questionResults.add(res)
                     withContext(Dispatchers.Main) {
                         onResult(res)
                         onStatus("Q$qNum/5: Token $i/10... ('$piece')")
@@ -279,6 +379,31 @@ suspend fun runBenchmark(
                 delay(5) 
             }
         }
+        
+        // Calculate Question Summary
+        if (questionResults.isNotEmpty()) {
+            val tpsList = questionResults.map { it.tps }.sorted()
+            val medianTps = if (tpsList.size % 2 == 0) {
+                (tpsList[tpsList.size / 2 - 1] + tpsList[tpsList.size / 2]) / 2.0
+            } else {
+                tpsList[tpsList.size / 2]
+            }
+
+            val summary = QuestionSummary(
+                questionIndex = qIdx,
+                questionText = question,
+                avgTps = tpsList.average(),
+                maxTps = tpsList.maxOrNull() ?: 0.0,
+                minTps = tpsList.minOrNull() ?: 0.0,
+                medianTps = medianTps,
+                ttft = questionResults.first().ttft,
+                peakRamMB = questionResults.maxOf { it.ramMB },
+                avgCpuGHz = questionResults.map { it.cpuGHz }.average(),
+                totalTime = questionResults.last().totalTime
+            )
+            onSummary(summary)
+        }
+        
         Log.i("TRUELARGEPERF", "BENCHMARK ANSWER $qNum: ${finalAnswer.toString()}")
     }
     
