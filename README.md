@@ -7,11 +7,12 @@ TrueLarge-RT is a native Android inference engine built on top of `llama.cpp`. I
 ## Key Features
 
 - **Native llama.cpp Integration**: Pure C++ core for maximum performance and low-level hardware optimization.
-- **Advanced Benchmarking**: 5-question standardized suite with real-time TPS, RAM, and CPU frequency graphing.
+- **Professional-Grade Benchmarking**: 5-question standardized suite with millisecond-precision TTFT (Time To First Token), and statistical TPS (Avg/Peak/Low/Median) tracking.
+- **Real-Time Telemetry Graphs**: Live visualization of inference speed, memory footprint (RSS MB), and CPU clock frequency (GHz) with visual per-question dividers.
 - **Auto-Discovery**: Automatically recognizes manually added GGUF models in `/Downloads/TrueLarge/models`.
 - **Smart Memory Management**: Dynamic `mlock` support and RAM-aware loading to prevent OOM crashes.
 - **Multi-Turn Persistence**: Optimized KV cache management for fast, conversational multi-turn inference.
-- **Developer-First Logging**: Detailed telemetry including CPU Core ID (#ID) tracking for performance profiling.
+- **Developer-First Profiling**: Detailed breakdowns of CPU core ID (#ID) and instantaneous hardware stats.
 
 ## Low-RAM Optimization (4GB Devices)
 
@@ -37,6 +38,15 @@ TrueLarge-RT employs a unique 3-tier loading strategy to enable large models (up
     - **Behavior**: Loads one layer at a time from storage, computes, and unloads.
     - **Benefit**: Runs huge models (e.g., 7B on 3GB RAM) that would otherwise crash. Slower, but enables inference on constrained hardware.
 
+## Advanced Telemetry & Benchmarking
+
+The benchmark screen provides high-fidelity hardware profiling for LLM inference:
+
+- **Precision TTFT**: Captured in milliseconds (ms) for high-resolution timing of the initial response delay.
+- **Statistical TPS**: Detailed breakdown of generation speed including **Peak**, **Median**, and **Lowest** rates per question.
+- **Hardware Monitoring**: Real-time tracking of RAM usage (MB) and CPU Frequency (GHz).
+- **Visual Analysis**: Synchronized telemetry graphs with vertical dividers to correlate hardware spikes with model outputs across the 5-question suite.
+
 ## Comparison with Other Runtimes
 
 | Feature | TrueLarge-RT | SmolChat | ONNX Runtime | Google AICore |
@@ -44,21 +54,17 @@ TrueLarge-RT employs a unique 3-tier loading strategy to enable large models (up
 | **Core** | `llama.cpp` (Native) | Web/High-level | General Purpose | Proprietary |
 | **Model Format** | GGUF (Optimized) | Various | ONNX | Proprietary |
 | **Openness** | Any GGUF model | Limited | Broad | Restricted (Gemini) |
-| **Telemetry** | Real-time TPS/RAM/CPU | Minimal | Profiling Tools | Opaque |
+| **Telemetry** | High-Res (ms/TPS/RSS) | Minimal | Profiling Tools | Opaque |
 | **Persistence** | Native KV Cache | Session-based | Execution Provider | System-level |
 
 ### Why TrueLarge-RT?
 Unlike general-purpose runtimes like **ONNX**, TrueLarge-RT is laser-focused on the GGUF ecosystem, leveraging `llama.cpp`'s highly optimized ARM NEON and DotProd kernels. Compared to **AICore**, it offers complete freedom—allowing researchers and developers to run any model (Qwen, Llama, Phi, Mistral) without proprietary restrictions.
 
-## Mobile Performance
-
-*Benchmarks pending. Currently testing on Snapdragon 8 Gen 2 / Gen 3 devices.*
-
 ## Getting Started
 
 1. **Clone the Repo**: `git clone https://github.com/nareshis21/Truelarge-RT.git`
 2. **Setup Models**: Paste your `.gguf` files into `/sdcard/Download/TrueLarge/models/`.
-3. **Run**: Build via Android Studio and use the **Benchmark** icon (AutoGraph) to profile your hardware.
+3. **Run**: Build via Android Studio and use the **Benchmark** icon to trigger the High-Resolution Hardware Profiler.
 
 ## License
 MIT License. Built for the open-source LLM community.
