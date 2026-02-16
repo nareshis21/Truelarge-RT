@@ -24,7 +24,7 @@ TrueLarge-RT is optimized to run large models (7B - 13B) even on constrained har
 
 TrueLarge-RT employs a unique 3-tier loading strategy to enable large models (up to 13B+) on mobile devices with limited RAM (4GB-8GB):
 
-![Architecture Diagram](https://raw.githubusercontent.com/nareshis21/Truelarge-RT/main/docs/architecture_hybrid.png)
+![Architecture Diagram](docs/architecture_hybrid.png)
 
 1.  **Full RAM (mlock)**:
     - **Trigger**: `Free RAM > Model Size + 1GB`.
