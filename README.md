@@ -1,7 +1,7 @@
+# TrueLarge-RT <img src="docs/app_icon.png" width="48" style="vertical-align: middle;">
+
 <div align="center">
 <img src="docs/new_arch.png" width="800px">
-
-# TrueLarge-RT
 
 **TrueLarge-RT: Break the Memory Wall on Android.**
 
