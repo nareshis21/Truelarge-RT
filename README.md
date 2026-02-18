@@ -75,6 +75,25 @@ git clone https://github.com/nareshis21/Truelarge-RT.git
 # File -> Open -> Select 'Truelarge-RT' folder
 
 # 3. Sync Gradle & Build
+
+## Building from Source
+
+You can build the APK using Android Studio or via command line:
+
+### Option 1: Command Line
+```bash
+# Debug APK
+./gradlew assembleDebug
+
+# Release APK (requires signing config)
+./gradlew assembleRelease
+```
+The output APK will be in `app/build/outputs/apk/debug/`.
+
+### Option 2: Android Studio
+1.  Open the project in Android Studio.
+2.  Go to **Build** > **Build Bundle(s) / APK(s)** > **Build APK(s)**.
+
 ```
 
 ## Quick Start
