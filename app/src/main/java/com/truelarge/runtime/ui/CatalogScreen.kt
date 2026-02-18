@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,6 +36,7 @@ import com.truelarge.runtime.data.RecommendedModel
 fun CatalogScreen(
     modelRepository: ModelRepository,
     onSearchClick: () -> Unit,
+    onDownloadsClick: () -> Unit,
     onModelSelect: (String, String?) -> Unit,
     onRecommendedClick: (String) -> Unit,
     onBenchmark: (String) -> Unit
@@ -65,6 +67,9 @@ fun CatalogScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onDownloadsClick) {
+                        Icon(Icons.Default.Download, "Downloads")
+                    }
                     IconButton(onClick = { localModels = modelRepository.getLocalModels() }) {
                         Icon(Icons.Default.Refresh, "Refresh")
                     }

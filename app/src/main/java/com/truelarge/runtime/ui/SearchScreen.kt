@@ -10,7 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -64,7 +64,7 @@ fun SearchScreen(
                 title = { Text("Search Models") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -141,7 +141,10 @@ fun SearchScreen(
                             downloadManager.download(file.downloadUrl, target, file.filename)
                         }
                     },
-                    onCancel = { downloadManager.cancelDownload() },
+                    onCancel = { file -> 
+                        val target = modelRepository.getDownloadPath(file.filename)
+                        downloadManager.deleteDownload(file.filename, target)
+                    },
                     onClose = {
                         selectedModelId = null
                         modelFiles = emptyList()
@@ -230,7 +233,7 @@ fun FileListView(
     isLoading: Boolean,
     downloadStates: Map<String, DownloadState>,
     onDownload: (ModelFile) -> Unit,
-    onCancel: () -> Unit,
+    onCancel: (ModelFile) -> Unit,
     onClose: () -> Unit
 ) {
     Column(
@@ -280,7 +283,7 @@ fun FileListView(
                     file = file,
                     downloadState = downloadStates[file.filename] ?: DownloadState.Idle,
                     onDownload = { onDownload(file) },
-                    onCancel = onCancel
+                    onCancel = { onCancel(file) }
                 )
             }
 
@@ -351,10 +354,18 @@ fun FileCard(
                         Text("Download")
                     }
                 }
-                is DownloadState.Downloading -> {
+                is DownloadState.Pending, is DownloadState.Downloading -> {
+                    val progress = (downloadState as? DownloadState.Downloading)?.progress ?: 0f
+                    val downloadedBytes = (downloadState as? DownloadState.Downloading)?.downloadedBytes ?: 0L
+                    val totalBytes = (downloadState as? DownloadState.Downloading)?.totalBytes ?: 0L
+
                     Column {
+                        if (downloadState is DownloadState.Pending) {
+                            Text("Preparing download...", style = MaterialTheme.typography.labelSmall)
+                        }
+                        
                         LinearProgressIndicator(
-                            progress = downloadState.progress,
+                            progress = { progress },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(6.dp),
@@ -366,15 +377,15 @@ fun FileCard(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            val downloadedMB = downloadState.downloadedBytes / (1024.0 * 1024.0)
-                            val totalMB = downloadState.totalBytes / (1024.0 * 1024.0)
+                            val downloadedMB = downloadedBytes / (1024.0 * 1024.0)
+                            val totalMB = totalBytes / (1024.0 * 1024.0)
                             Text(
-                                String.format("%.1f / %.1f MB", downloadedMB, totalMB),
+                                if (totalBytes > 0) String.format("%.1f / %.1f MB", downloadedMB, totalMB) else "Starting...",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                "${(downloadState.progress * 100).toInt()}%",
+                                "${(progress * 100).toInt()}%",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.SemiBold
@@ -422,13 +433,29 @@ fun FileCard(
                         }
                     }
                 }
-                is DownloadState.Cancelled -> {
-                    Button(
-                        onClick = onDownload,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text("Download")
+                is DownloadState.Paused -> {
+                    Column {
+                        Text("Paused", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = onDownload,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.secondary
+                                )
+                            ) {
+                                Text("Resume")
+                            }
+                            OutlinedButton(
+                                onClick = onCancel,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Cancel")
+                            }
+                        }
                     }
                 }
             }

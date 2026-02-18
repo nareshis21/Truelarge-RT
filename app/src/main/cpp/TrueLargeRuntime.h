@@ -43,9 +43,11 @@ public:
     long lastRAM = 0;
     double lastCPUFreq = 0.0;
     double lastTotalTime = 0.0;
+    std::string getInferenceMode() const { return inferenceMode; }
 
 private:
     std::string modelPath;
+    std::string inferenceMode = "Unknown";
     int nThreads = 4;
     int nGpuLayers = 0;
     
@@ -100,10 +102,23 @@ private:
     std::chrono::steady_clock::time_point t_generation_start;
     std::chrono::steady_clock::time_point t_session_start;
     
+    enum ArchType {
+        ARCH_LLAMA,
+        ARCH_GPTNEOX,
+        ARCH_QWEN,
+        ARCH_GEMMA,
+        ARCH_UNKNOWN
+    };
+
+    ArchType model_arch_type = ARCH_LLAMA;
+
     // Model HParams for LBL
     float model_rope_freq_base = 10000.0f;
     float model_rope_freq_scale = 1.0f;
     float model_rms_norm_eps = 1e-5f;
+    int model_n_rot = 0;
+    bool model_parallel_residual = false;
+
 
     // Map for current layer weights
     std::map<std::string, struct ggml_tensor*> currentWeightTensors;

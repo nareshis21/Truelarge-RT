@@ -1,120 +1,105 @@
 package com.truelarge.runtime.download
 
+import android.content.Context
 import android.util.Log
+import androidx.lifecycle.asFlow
+import androidx.work.*
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * Download state for tracking progress.
  */
 sealed class DownloadState {
     object Idle : DownloadState()
+    object Pending : DownloadState()
     data class Downloading(val progress: Float, val downloadedBytes: Long, val totalBytes: Long) : DownloadState()
     data class Completed(val filePath: String) : DownloadState()
     data class Error(val message: String) : DownloadState()
-    object Cancelled : DownloadState()
+    object Paused : DownloadState()
 }
 
-/**
- * Manages model downloads from HuggingFace with progress tracking.
- */
-class ModelDownloadManager {
+class ModelDownloadManager(val context: Context) {
 
     private val TAG = "ModelDownloadManager"
+    private val workManager = WorkManager.getInstance(context)
 
-    private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val downloadState: StateFlow<DownloadState> = _downloadState
-
-    private val _activeDownloads = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
-    val activeDownloads: StateFlow<Map<String, DownloadState>> = _activeDownloads
-
-    @Volatile
-    private var cancelRequested = false
-
-    /**
-     * Download a file from URL to the target path.
-     */
-    suspend fun download(url: String, targetFile: File, fileKey: String) = withContext(Dispatchers.IO) {
-        cancelRequested = false
-        updateDownloadState(fileKey, DownloadState.Downloading(0f, 0, 0))
-
-        try {
-            val connection = URL(url).openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 30_000
-            connection.readTimeout = 30_000
-            connection.setRequestProperty("User-Agent", "TrueLarge-Android/1.0")
-
-            // Handle redirects (HuggingFace uses them)
-            connection.instanceFollowRedirects = true
-
-            val responseCode = connection.responseCode
-            if (responseCode != HttpURLConnection.HTTP_OK) {
-                updateDownloadState(fileKey, DownloadState.Error("HTTP $responseCode"))
-                return@withContext
-            }
-
-            val totalBytes = connection.contentLengthLong
-            var downloadedBytes = 0L
-
-            // Use temp file to avoid partial downloads
-            val tempFile = File(targetFile.parent, "${targetFile.name}.tmp")
-
-            connection.inputStream.use { input ->
-                FileOutputStream(tempFile).use { output ->
-                    val buffer = ByteArray(8192)
-                    var bytesRead: Int
-
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        if (cancelRequested) {
-                            tempFile.delete()
-                            updateDownloadState(fileKey, DownloadState.Cancelled)
-                            return@withContext
+    // Unified flow to observe all model downloads
+    val activeDownloads: StateFlow<Map<String, DownloadState>> = 
+        workManager.getWorkInfosByTagLiveData("model_download").asFlow()
+            .map { infos ->
+                infos.associate { info ->
+                    val fileKey = info.tags.firstOrNull { 
+                        it != "model_download" && it != "com.truelarge.runtime.download.DownloadWorker" 
+                    } ?: "unknown"
+                    fileKey to when (info.state) {
+                        WorkInfo.State.RUNNING -> {
+                            val progress = info.progress.getFloat("progress", 0f)
+                            val downloaded = info.progress.getLong("downloaded", 0)
+                            val total = info.progress.getLong("total", 0)
+                            DownloadState.Downloading(progress, downloaded, total)
                         }
-
-                        output.write(buffer, 0, bytesRead)
-                        downloadedBytes += bytesRead
-
-                        val progress = if (totalBytes > 0) {
-                            downloadedBytes.toFloat() / totalBytes.toFloat()
-                        } else 0f
-
-                        updateDownloadState(fileKey, DownloadState.Downloading(progress, downloadedBytes, totalBytes))
+                        WorkInfo.State.ENQUEUED -> DownloadState.Pending
+                        WorkInfo.State.SUCCEEDED -> DownloadState.Completed("")
+                        WorkInfo.State.FAILED -> DownloadState.Error("Failed")
+                        WorkInfo.State.CANCELLED -> DownloadState.Paused
+                        else -> DownloadState.Idle
                     }
                 }
             }
+            .stateIn(CoroutineScope(Dispatchers.Main), SharingStarted.Lazily, emptyMap())
 
-            // Rename temp file to final
-            tempFile.renameTo(targetFile)
-            updateDownloadState(fileKey, DownloadState.Completed(targetFile.absolutePath))
-            Log.i(TAG, "Download complete: ${targetFile.absolutePath}")
+    fun download(url: String, targetFile: File, fileKey: String, force: Boolean = false) {
+        val data = workDataOf(
+            "url" to url,
+            "targetPath" to targetFile.absolutePath,
+            "fileKey" to fileKey
+        )
 
-        } catch (e: Exception) {
-            Log.e(TAG, "Download failed", e)
-            updateDownloadState(fileKey, DownloadState.Error(e.message ?: "Unknown error"))
-        }
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(data)
+            .setConstraints(Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build())
+            .addTag(fileKey)
+            .addTag("model_download")
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .build()
+
+        val policy = if (force) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP
+        workManager.enqueueUniqueWork(fileKey, policy, request)
+    }
+
+    fun pauseDownload(fileKey: String) {
+        workManager.cancelUniqueWork(fileKey)
+    }
+
+    fun deleteDownload(fileKey: String, targetFile: File) {
+        workManager.cancelUniqueWork(fileKey)
+        workManager.pruneWork()
+        val tempFile = File(targetFile.parent, "${targetFile.name}.tmp")
+        if (tempFile.exists()) tempFile.delete()
+        val metaFile = File(targetFile.parent, "${targetFile.name}.json")
+        if (metaFile.exists()) metaFile.delete()
     }
 
     fun cancelDownload() {
-        cancelRequested = true
+        // Universal cancel for legacy support
+        workManager.cancelAllWork()
     }
 
-    fun clearState(fileKey: String) {
-        val current = _activeDownloads.value.toMutableMap()
-        current.remove(fileKey)
-        _activeDownloads.value = current
+    fun resumeDownload(url: String, targetFile: File, fileKey: String) {
+        download(url, targetFile, fileKey, force = true)
     }
 
-    private fun updateDownloadState(fileKey: String, state: DownloadState) {
-        val current = _activeDownloads.value.toMutableMap()
-        current[fileKey] = state
-        _activeDownloads.value = current
-        _downloadState.value = state
+    fun getWorkInfo(fileKey: String): Flow<WorkInfo?> {
+        return workManager.getWorkInfosForUniqueWorkLiveData(fileKey).asFlow().map { it.firstOrNull() }
+    }
+
+    fun getAllDownloads(): Flow<List<WorkInfo>> {
+        return workManager.getWorkInfosByTagLiveData("model_download").asFlow()
     }
 }

@@ -76,9 +76,39 @@ class ModelRepository(private val context: Context) {
     }
 
     /**
+     * List all partial downloads (.gguf.tmp files)
+     */
+    fun getPartialModels(): List<File> {
+        val publicDir = getModelsDir()
+        val privateDir = context.getExternalFilesDir("models")
+        val partials = mutableListOf<File>()
+        
+        if (publicDir.exists()) {
+            publicDir.listFiles()
+                ?.filter { it.isFile && it.name.endsWith(".gguf.tmp", ignoreCase = true) }
+                ?.let { partials.addAll(it) }
+        }
+        
+        if (privateDir != null && privateDir.exists()) {
+            privateDir.listFiles()
+                ?.filter { it.isFile && it.name.endsWith(".gguf.tmp", ignoreCase = true) }
+                ?.let { partials.addAll(it) }
+        }
+        
+        return partials
+    }
+
+    /**
      * Get curated list of recommended small GGUF models.
      */
     fun getRecommendedModels(): List<RecommendedModel> = listOf(
+        RecommendedModel(
+            repoId = "Qwen/Qwen2.5-Coder-32B-Instruct-GGUF",
+            displayName = "Qwen 2.5 Coder 32B",
+            description = "Powerful coding assistant (Needs LBL mode)",
+            parameterSize = "32B",
+            author = "Qwen"
+        ),
         RecommendedModel(
             repoId = "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
             displayName = "Qwen 2.5 0.5B Instruct",

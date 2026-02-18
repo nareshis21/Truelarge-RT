@@ -1,12 +1,18 @@
 #include "LayerScheduler.h"
 #include <iostream>
 #include <algorithm>
+#include <android/log.h>
+#include <sys/mman.h>
+
+#define TAG "TrueLargeLBL"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 LayerScheduler::LayerScheduler(const std::string& path, const GGUFHeaderParser* parserPtr, int maxMem)
     : modelPath(path), parser(parserPtr), maxLayersInMemory(maxMem), loader(path), 
       prefetchRunning(false), nextPrefetchLayer(-1) {
     if (!loader.init()) {
-        std::cerr << "LayerScheduler: Failed to initialize loader for " << path << std::endl;
+        LOGE("LayerScheduler: Failed to initialize loader for %s", path.c_str());
     }
 }
 
@@ -46,18 +52,28 @@ bool LayerScheduler::prepareLayer(int layerIndex) {
         
         if (evictCandidate != -1) {
             // Internal release (lock already held)
+            void* data = weightBuffers[evictCandidate]->getData();
+            size_t size = weightBuffers[evictCandidate]->getSize();
+            if (data) {
+                madvise(data, size, MADV_DONTNEED);
+            }
             weightBuffers.erase(evictCandidate);
             loadedLayers.erase(evictCandidate);
-            // std::cout << "Evicted layer " << evictCandidate << std::endl;
+            LOGI("Evicted layer %d (Hinted OS to reclaim RAM)", evictCandidate);
         } else {
              // If all loaded layers are > layerIndex (unlikely in forward pass),
              // or maxLayers is too small.
              if (loadedLayers.size() >= maxLayersInMemory) {
                  // Force evict ANY layer that isn't current?
-                 // Just take first.
                  int first = *loadedLayers.begin();
+                 void* data = weightBuffers[first]->getData();
+                 size_t size = weightBuffers[first]->getSize();
+                 if (data) {
+                     madvise(data, size, MADV_DONTNEED);
+                 }
                  weightBuffers.erase(first);
                  loadedLayers.erase(first);
+                 LOGI("Fallback Evicted layer %d (Hinted OS)", first);
              }
         }
     }
@@ -68,7 +84,7 @@ bool LayerScheduler::prepareLayer(int layerIndex) {
 bool LayerScheduler::loadLayerInternal(int layerIndex) {
     const LayerSourceInfo* info = parser->getLayerSourceInfo(layerIndex);
     if (!info) {
-        std::cerr << "LayerScheduler: No info for layer " << layerIndex << std::endl;
+        LOGE("LayerScheduler: No info for layer %d", layerIndex);
         return false;
     }
     
@@ -95,32 +111,22 @@ bool LayerScheduler::loadLayerInternal(int layerIndex) {
     
     size_t totalRange = maxLimit - minOffset;
     
-    // Allocate buffer
+    // Zero-Copy Optimization:
+    // Instead of malloc + memcpy, we adopt the mmap directly.
+    LayerMap lm = loader.loadLayerMap(minOffset, totalRange);
+    if (!lm.data) {
+        LOGE("LayerScheduler: Failed to map layer %d", layerIndex);
+        return false;
+    }
+    
     auto buffer = std::make_unique<WeightBuffer>();
-    if (!buffer->allocate(totalRange)) {
-        std::cerr << "LayerScheduler: OOM allocating layer " << layerIndex << " size " << totalRange << std::endl;
-        return false;
-    }
-    
-    // Load data
-    // Optimization: Load execution range in one go?
-    // LayerLoader::loadLayer(minOffset, totalRange)
-    void* src = loader.loadLayer(minOffset, totalRange);
-    if (!src) {
-        return false;
-    }
-    
-    // Copy to buffer
-    buffer->loadFrom(src, totalRange);
-    
-    // Unload source mapping
-    loader.unloadLayer(src, totalRange);
+    buffer->adoptMmap(lm.data, totalRange, lm.fullMapPtr, lm.fullMapSize);
     
     // Store
     weightBuffers[layerIndex] = std::move(buffer);
     loadedLayers.insert(layerIndex);
     
-    // std::cout << "Loaded layer " << layerIndex << " (" << totalRange << " bytes)" << std::endl;
+    LOGI("Loaded layer %d (Zero-Copy Mmap: %zu bytes)", layerIndex, totalRange);
     return true;
 }
 

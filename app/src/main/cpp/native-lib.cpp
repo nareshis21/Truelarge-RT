@@ -66,10 +66,11 @@ JNIEXPORT jstring JNICALL
 Java_com_truelarge_runtime_NativeEngine_getBenchmarkData(JNIEnv* env, jobject) {
     if (!engine) return env->NewStringUTF("0,0,0,0");
     
-    // Format: "TTFT,TPS,RAM,CPU,TotalTime"
-    char buf[128];
-    snprintf(buf, sizeof(buf), "%.2f,%.2f,%ld,%.2f,%.2f", 
-             engine->lastTTFT, engine->lastTPS, engine->lastRAM, engine->lastCPUFreq, engine->lastTotalTime);
+    // Format: "TTFT,TPS,RAM,CPU,TotalTime,Mode"
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%.2f,%.2f,%ld,%.2f,%.2f,%s", 
+             engine->lastTTFT, engine->lastTPS, engine->lastRAM, engine->lastCPUFreq, engine->lastTotalTime,
+             engine->getInferenceMode().c_str());
     
     return env->NewStringUTF(buf);
 }
@@ -90,6 +91,12 @@ JNIEXPORT jint JNICALL
 Java_com_truelarge_runtime_NativeEngine_getContextCurrent(JNIEnv* env, jobject) {
     if (!engine) return 0;
     return engine->getContextCurrent();
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_truelarge_runtime_NativeEngine_getInferenceMode(JNIEnv* env, jobject) {
+    if (!engine) return env->NewStringUTF("Not Initialized");
+    return env->NewStringUTF(engine->getInferenceMode().c_str());
 }
 
 } // extern "C"

@@ -37,7 +37,8 @@ data class BenchmarkResult(
     val tps: Double,
     val ramMB: Long,
     val cpuGHz: Double,
-    val totalTime: Double
+    val totalTime: Double,
+    val inferenceMode: String
 )
 
 data class QuestionSummary(
@@ -96,6 +97,14 @@ fun BenchmarkScreen(
                     Text(text = modelName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(text = "Status: $status", style = MaterialTheme.typography.bodySmall)
+                    
+                    val activeMode = results.lastOrNull()?.inferenceMode ?: "Detecting..."
+                    Text(
+                        text = "Engine: $activeMode", 
+                        style = MaterialTheme.typography.bodySmall, 
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
                     
                     if (!isRunning) {
                         Button(
@@ -359,7 +368,7 @@ suspend fun runBenchmark(
                 
                 val rawCsv = engine.getBenchmarkData()
                 val parts = rawCsv.split(",")
-                if (parts.size >= 5) {
+                if (parts.size >= 6) {
                     val res = BenchmarkResult(
                         tokenIndex = globalTokenCount,
                         questionIndex = qIdx,
@@ -368,7 +377,8 @@ suspend fun runBenchmark(
                         tps = parts[1].toDoubleOrNull() ?: 0.0,
                         ramMB = parts[2].toLongOrNull() ?: 0,
                         cpuGHz = parts[3].toDoubleOrNull() ?: 0.0,
-                        totalTime = parts[4].toDoubleOrNull() ?: 0.0
+                        totalTime = parts[4].toDoubleOrNull() ?: 0.0,
+                        inferenceMode = parts[5].trim()
                     )
                     questionResults.add(res)
                     withContext(Dispatchers.Main) {

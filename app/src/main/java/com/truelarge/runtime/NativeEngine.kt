@@ -18,4 +18,5 @@ class NativeEngine {
     external fun getContextTrain(): Int
     external fun getContextCurrent(): Int
     external fun getBenchmarkData(): String
+    external fun getInferenceMode(): String
 }

@@ -1,4 +1,6 @@
 #include "TrueLargeRuntime.h"
+#include <sys/mman.h>
+#include "WeightBuffer.h"
 #include <iostream>
 #include <vector>
 #include <chrono>
@@ -6,12 +8,25 @@
 #include <sstream>
 #include <iomanip>
 #include <android/log.h>
-#include <cstring> // For memset, memcpy if needed
+#include <cstring>
+#include <cmath>
+#include <mutex>
+#include <map>
+#include <string>
+#include <algorithm>
+#include <thread>
+
+static void custom_ggml_abort_callback(const char * error_message) {
+    __android_log_print(ANDROID_LOG_ERROR, "TrueLargePerf", "GGML CRASH ABORT: %s", error_message);
+}
 
 #define TAG "TrueLargePerf"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+#define TAG_GQA "TrueLargeGQA"
+#define LOGI_GQA(...) __android_log_print(ANDROID_LOG_INFO, TAG_GQA, __VA_ARGS__)
 
 // Helper to get RAM usage (RSS)
 long getMemoryUsageKB() {
@@ -60,20 +75,8 @@ long getCurrentCpuFreqHz() {
     return 0;
 }
 
-// Helper to set CPU affinity (prefer big cores)
-void set_cpu_affinity() {
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    int n_cores = sysconf(_SC_NPROCESSORS_CONF);
-    // Prefer the last 4 cores (usually Big cores like Cortex-X or A7xx on Android)
-    // Most octa-core chips have 4 big cores at the higher indices.
-    for (int i = std::max(0, n_cores - 4); i < n_cores; i++) {
-        CPU_SET(i, &cpuset);
-    }
-    if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) != 0) {
-        LOGE("Failed to set CPU affinity");
-    }
-}
+// Helper to set CPU affinity (REMOVED: User requested removal due to slowness)
+/* void set_cpu_affinity() { ... } */
 
 // Helper to convert token to string
 std::string token_to_str(const llama_context* ctx, llama_token token) {
@@ -123,6 +126,7 @@ bool TrueLargeRuntime::loadModel(const std::string& path) {
     if (detectLayerByLayerNeeded(fileSizeKB)) {
         LOGI("Low RAM detected relative to model. Enabling Layer-by-Layer Loading.");
         useLayerByLayer = true;
+        inferenceMode = "Layer-by-Layer (Disk Swap)";
         
         // Initialize parser if not already done (Wait, headerParser needs to be init!)
         // Typically headerParser is needed for LBL.
@@ -138,9 +142,11 @@ bool TrueLargeRuntime::loadModel(const std::string& path) {
     } else if (availRamKB > (fileSizeKB + 1024 * 1024)) {
         LOGI("Sufficient RAM detected. Locking model in memory.");
         model_params.use_mlock = true;
+        inferenceMode = "Locked RAM (Maximum Speed)";
     } else {
         LOGI("Using standard mmap.");
         model_params.use_mlock = false; 
+        inferenceMode = "Standard MMAP (OS Managed Swapping)";
     }
 
     // API change: llama_load_model_from_file -> llama_model_load_from_file
@@ -193,7 +199,7 @@ static bool g_batch_init = false;
 
 bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory) {
     t_session_start = std::chrono::steady_clock::now();
-    set_cpu_affinity(); // Pin to big cores for this session
+    // set_cpu_affinity(); // Pin to big cores (REMOVED: Caused performance issues)
     if (!model || !ctx) {
         LOGE("Model not loaded");
         return false;
@@ -301,13 +307,14 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
         // 1. Get embeddings
         // Only allocate ctx_compute if it doesn't exist (it was cleared above if !keepHistory)
         if (!ctx_compute) {
+            ggml_set_abort_callback(custom_ggml_abort_callback);
             int n_embd = llama_model_n_embd(model);
-            size_t emb_size = std::max((size_t)(64*1024*1024), (size_t)n_tokens * n_embd * 4 * 4) + 32*1024*1024;
-            struct ggml_init_params params = { .mem_size = emb_size, .mem_buffer = NULL };
-            ctx_compute = ggml_init(params);
+            size_t emb_size = std::max((size_t)(2048LL*1024*1024), (size_t)n_tokens * n_embd * 4 * 4) + 128*1024*1024;
+            struct ggml_init_params params_init = { .mem_size = emb_size, .mem_buffer = NULL };
+            ctx_compute = ggml_init(params_init);
         }
         if (!ctx_compute_back) {
-            struct ggml_init_params params_back = { .mem_size = 64*1024*1024 + (size_t)n_tokens * 1024 * 4, .mem_buffer = NULL };
+            struct ggml_init_params params_back = { .mem_size = 2048LL*1024*1024 + (size_t)n_tokens * 1024 * 4, .mem_buffer = NULL };
             ctx_compute_back = ggml_init(params_back);
         }
         
@@ -317,7 +324,7 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
         struct ggml_tensor* input = ggml_get_rows(ctx_compute, w_token_embd, tokens_idx);
         
         // CRITICAL: Compute the embedding graph before forwarding
-        struct ggml_cgraph* gf_emb = ggml_new_graph(ctx_compute);
+        struct ggml_cgraph* gf_emb = ggml_new_graph_custom(ctx_compute, 8192, false);
         ggml_build_forward_expand(gf_emb, input);
         ggml_graph_compute_with_ctx(ctx_compute, gf_emb, nThreads);
         
@@ -334,7 +341,7 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
         struct ggml_context* ctx_ping = ctx_compute;
         struct ggml_context* ctx_pong = ctx_compute_back;
         int n_layer = llama_model_n_layer(model);
-        struct ggml_init_params params_layer = { .mem_size = 64*1024*1024 + (size_t)n_tokens * 1024 * 4, .mem_buffer = NULL };
+        struct ggml_init_params params_layer = { .mem_size = 2048LL*1024*1024, .mem_buffer = NULL };
         
         for (int i = 0; i < n_layer; i++) {
             if (i % 8 == 0) LOGI("LBL Pre-fill: Progress %d/%d layers", i, n_layer);
@@ -349,7 +356,7 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
                 break;
             }
             
-            struct ggml_cgraph* gf = ggml_new_graph(ctx_pong);
+            struct ggml_cgraph* gf = ggml_new_graph_custom(ctx_pong, 8192, false);
             ggml_build_forward_expand(gf, out);
             ggml_graph_compute_with_ctx(ctx_pong, gf, nThreads);
             
@@ -379,7 +386,7 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
         }
         struct ggml_tensor* logits = ggml_mul_mat(ctx_compute, w_output, norm);
         
-        struct ggml_cgraph* gf_logits = ggml_new_graph(ctx_compute);
+        struct ggml_cgraph* gf_logits = ggml_new_graph_custom(ctx_compute, 8192, false);
         ggml_build_forward_expand(gf_logits, logits);
         ggml_graph_compute_with_ctx(ctx_compute, gf_logits, nThreads);
         
@@ -553,7 +560,7 @@ void TrueLargeRuntime::initLayerByLayer() {
     LOGI("Initializing Layer-by-Layer Scheduler");
     
     // Max layers in memory:
-    // Calculate based on remaining RAM.
+    // Calculate based on remaining RAM, accounting for KV Cache and OS overhead.
     long availRamKB = getAvailableMemoryKB();
     long layerSizeKB = 0;
     
@@ -567,26 +574,63 @@ void TrueLargeRuntime::initLayerByLayer() {
         layerSizeKB = totalSize / 1024;
     }
     
-    int maxLayers = 3; // safe default
+    // KV Cache Size (Persistent RAM)
+    int n_layer = llama_model_n_layer(model);
+    int n_embd = llama_model_n_embd(model);
+    int n_head = llama_model_n_head(model);
+    int n_head_kv = llama_model_n_head_kv(model);
+    int head_dim = n_embd / n_head;
+    size_t kv_size_kb = ((size_t)n_layer * 2 * kv_max_tokens * (n_head_kv * head_dim) * sizeof(float)) / 1024;
+
+    int maxLayers = 2; // Strict default for stability
     if (layerSizeKB > 0) {
-        // Leave 1GB for OS/App/KV Cache
-        long budgetKB = availRamKB - (1024 * 1024); 
-        if (budgetKB > 0) {
-            maxLayers = budgetKB / layerSizeKB;
+        // Leave 1.5GB for OS/App and subtract KV Cache from budget
+        // Safety buffer KB: 1,572,864 (1.5GB)
+        long safetyBufferKB = 1536 * 1024; 
+        long workingBudgetKB = availRamKB - safetyBufferKB - (long)kv_size_kb;
+        
+        if (workingBudgetKB > 0) {
+            maxLayers = workingBudgetKB / layerSizeKB;
         }
     }
-    if (maxLayers < 2) maxLayers = 2; // Minimum 2 for prefetch
-    if (maxLayers > 8) maxLayers = 8; // Cap
+
+    // On devices with low absolute RAM, hard cap to avoid any risk of LMK
+    if (availRamKB < 2500 * 1024) { // < 2.5GB Available (Strict)
+        if (maxLayers > 2) maxLayers = 2;
+    }
+    
+    if (maxLayers < 1) maxLayers = 1; // Minimum 1 for execution
+    if (maxLayers > 10) maxLayers = 10; // Relaxed cap for experimental high-end usage
     
     // Captured HParams
     char arch[64] = "unknown";
     llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch));
     
-    // Log metadata for debugging if RoPE base is weird
-    int n_meta = llama_model_meta_count(model);
-    LOGI("LBL: Model has %d metadata keys. Arch: %s", n_meta, arch);
+    if (strcmp(arch, "gptneox") == 0) {
+        model_arch_type = ARCH_GPTNEOX;
+        model_parallel_residual = true; // GPT-NeoX traditionally uses parallel attention/FFN
 
-    model_rope_freq_base = getModelMetaFloat("llama.rope.freq_base", 0.0f);
+    } else if (strstr(arch, "qwen2") || strstr(arch, "qwen3")) {
+        model_arch_type = ARCH_QWEN;
+    } else if (strstr(arch, "gemma")) {
+        model_arch_type = ARCH_GEMMA;
+    } else {
+        model_arch_type = ARCH_LLAMA;
+    }
+
+    model_n_rot = (int)getModelMetaFloat("llama.rope.dimension_count", 0);
+    if (model_n_rot == 0) model_n_rot = (int)getModelMetaFloat("rope.dimension_count", 0);
+    if (model_n_rot == 0) model_n_rot = (int)getModelMetaFloat("gptneox.rope.dimension_count", 0);
+
+
+    // Log metadata for debugging
+    LOGI("LBL Init: Avail=%ld MB, KV_Cache=%ld MB, Layer=%ld MB, Budget=%ld MB, MaxLayers=%d", 
+         availRamKB/1024, kv_size_kb/1024, layerSizeKB/1024, 
+         (availRamKB - (long)kv_size_kb - (1536*1024))/1024, maxLayers);
+
+    model_rope_freq_base = getModelMetaFloat("gpt-oss.rope.freq_base", 0.0f);
+    if (model_rope_freq_base == 0.0f) model_rope_freq_base = getModelMetaFloat("gptneox.rope.freq_base", 0.0f);
+    if (model_rope_freq_base == 0.0f) model_rope_freq_base = getModelMetaFloat("llama.rope.freq_base", 0.0f);
     if (model_rope_freq_base == 0.0f) model_rope_freq_base = getModelMetaFloat("qwen2.rope.freq_base", 0.0f);
     if (model_rope_freq_base == 0.0f) model_rope_freq_base = getModelMetaFloat("qwen3.rope.freq_base", 0.0f);
     if (model_rope_freq_base == 0.0f) model_rope_freq_base = getModelMetaFloat("rope.freq_base", 0.0f);
@@ -616,7 +660,8 @@ void TrueLargeRuntime::initLayerByLayer() {
     }
 
     // RMS Norm Epsilon lookup with fallbacks
-    model_rms_norm_eps = getModelMetaFloat("llama.attention.layer_norm_rms_epsilon", 0.0f);
+    model_rms_norm_eps = getModelMetaFloat("gptneox.attention.layer_norm_rms_epsilon", 0.0f);
+    if (model_rms_norm_eps == 0.0f) model_rms_norm_eps = getModelMetaFloat("llama.attention.layer_norm_rms_epsilon", 0.0f);
     if (model_rms_norm_eps == 0.0f) model_rms_norm_eps = getModelMetaFloat("qwen2.attention.layer_norm_rms_epsilon", 0.0f);
     if (model_rms_norm_eps == 0.0f) model_rms_norm_eps = getModelMetaFloat("qwen3.attention.layer_norm_rms_epsilon", 0.0f);
     if (model_rms_norm_eps == 0.0f) model_rms_norm_eps = getModelMetaFloat("attention.layer_norm_rms_epsilon", 0.0f);
@@ -672,13 +717,6 @@ void TrueLargeRuntime::initLayerByLayer() {
     };
     ctx_global = ggml_init(params_g);
 
-    // KV Cache context (persistent)
-    int n_layer = llama_model_n_layer(model);
-    int n_embd = llama_model_n_embd(model);
-    int n_head = llama_model_n_head(model);
-    int n_head_kv = llama_model_n_head_kv(model);
-    int head_dim = n_embd / n_head;
-
     // 40 layers * 2 * 512 * 5120 * 4 bytes (F32) = ~838 MB
     // Let's allocate enough for the KV context.
     size_t kv_size = (size_t)n_layer * 2 * kv_max_tokens * (n_head_kv * head_dim) * sizeof(float) + (1024 * 1024 * 10);
@@ -700,8 +738,7 @@ void TrueLargeRuntime::initLayerByLayer() {
     }
     
     // ctx_global = ggml_init(params_g); // Not strictly needed if we reuse llama tensors?
-    // Let's rely on initGlobalWeights logic.
-    initGlobalWeights();
+    // Let's rely on first call.
 }
 
 float TrueLargeRuntime::getModelMetaFloat(const char* key, float defaultValue) {
@@ -799,6 +836,14 @@ static struct ggml_tensor* get_w(const std::map<std::string, struct ggml_tensor*
     return it->second;
 }
 
+static struct ggml_tensor* get_optional_w(const std::map<std::string, struct ggml_tensor*>& tensors, const std::string& suffix) {
+    auto it = tensors.find(suffix);
+    if (it == tensors.end()) {
+        return nullptr;
+    }
+    return it->second;
+}
+
 struct ggml_tensor* TrueLargeRuntime::forwardLayer(int layerIndex, struct ggml_tensor* input, struct ggml_context* ctx_build) {
     // 1. Prepare weights
     initLayerWeights(layerIndex);
@@ -822,55 +867,169 @@ struct ggml_tensor* TrueLargeRuntime::forwardLayer(int layerIndex, struct ggml_t
     int n_head_kv = llama_model_n_head_kv(model); 
     int n_embd = llama_model_n_embd(model);
     int n_tokens = input->ne[1];
-    int head_dim = n_embd / n_head;
+    
+    // Retrieve weights first to check dimensions
+    struct ggml_tensor* w_q = get_optional_w(currentWeightTensors, "attn_q.weight");
+    
+    int head_dim = 0;
+    if (w_q) {
+        // w_q is [n_embd, dim_q] = [n_embd, n_head * head_dim]
+        // ne[1] should be dim_q.
+        head_dim = w_q->ne[1] / n_head;
+        LOGI("L%d Trace: Inferred head_dim=%d from w_q", layerIndex, head_dim);
+    } else {
+        head_dim = n_embd / n_head;
+        LOGI("L%d Trace: Calculated head_dim=%d (n_embd/n_head)", layerIndex, head_dim);
+    }
     
     float norm_rms_eps = model_rms_norm_eps; 
     float freq_base = model_rope_freq_base;
     float freq_scale = model_rope_freq_scale;
     
-    // Retrieve weights
-    struct ggml_tensor* w_attn_norm = get_w(currentWeightTensors, "attn_norm.weight");
-    struct ggml_tensor* w_q = get_w(currentWeightTensors, "attn_q.weight");
-    struct ggml_tensor* w_k = get_w(currentWeightTensors, "attn_k.weight");
-    struct ggml_tensor* w_v = get_w(currentWeightTensors, "attn_v.weight");
-    struct ggml_tensor* w_o = get_w(currentWeightTensors, "attn_output.weight");
-    struct ggml_tensor* w_ffn_norm = get_w(currentWeightTensors, "ffn_norm.weight");
-    struct ggml_tensor* w_gate = get_w(currentWeightTensors, "ffn_gate.weight");
-    struct ggml_tensor* w_down = get_w(currentWeightTensors, "ffn_down.weight");
-    // QK-Norm weights
-    struct ggml_tensor* w_q_norm = get_w(currentWeightTensors, "attn_q_norm.weight");
-    struct ggml_tensor* w_k_norm = get_w(currentWeightTensors, "attn_k_norm.weight");
-    struct ggml_tensor* w_up = get_w(currentWeightTensors, "ffn_up.weight");
+    // Retrieve weights with fallbacks for GPT-NeoX / GPT-OSS naming
+    struct ggml_tensor* w_attn_norm = get_optional_w(currentWeightTensors, "attn_norm.weight");
+    if (!w_attn_norm) w_attn_norm = get_optional_w(currentWeightTensors, "input_layernorm.weight");
+
+    // w_q already retrieved above for head_dim calculation
+    struct ggml_tensor* w_k = get_optional_w(currentWeightTensors, "attn_k.weight");
+    struct ggml_tensor* w_v = get_optional_w(currentWeightTensors, "attn_v.weight");
     
-    // Optional biases (Qwen2/Qwen3 have attention biases)
-    auto it_qb = currentWeightTensors.find("attn_q.bias");
-    struct ggml_tensor* b_q = (it_qb != currentWeightTensors.end()) ? it_qb->second : nullptr;
-    auto it_kb = currentWeightTensors.find("attn_k.bias");
-    struct ggml_tensor* b_k = (it_kb != currentWeightTensors.end()) ? it_kb->second : nullptr;
-    auto it_vb = currentWeightTensors.find("attn_v.bias");
-    struct ggml_tensor* b_v = (it_vb != currentWeightTensors.end()) ? it_vb->second : nullptr;
+    struct ggml_tensor* w_qkv = get_optional_w(currentWeightTensors, "attn_qkv.weight");
+    if (!w_qkv) w_qkv = get_optional_w(currentWeightTensors, "attention.query_key_value.weight");
+
+    struct ggml_tensor* w_o = get_optional_w(currentWeightTensors, "attn_output.weight");
+    if (!w_o) w_o = get_optional_w(currentWeightTensors, "attention.dense.weight");
     
-    if (!w_attn_norm || !w_q || !w_k || !w_v || !w_o || !w_ffn_norm || !w_gate || !w_up || !w_down) {
-        LOGE("Forward: Missing weights for layer %d", layerIndex);
+    struct ggml_tensor* w_ffn_norm = get_optional_w(currentWeightTensors, "ffn_norm.weight");
+    if (!w_ffn_norm) w_ffn_norm = get_optional_w(currentWeightTensors, "post_attention_layernorm.weight");
+
+    struct ggml_tensor* w_gate = get_optional_w(currentWeightTensors, "ffn_gate.weight");
+    
+    struct ggml_tensor* w_down = get_optional_w(currentWeightTensors, "ffn_down.weight");
+    if (!w_down) w_down = get_optional_w(currentWeightTensors, "mlp.dense_4h_to_h.weight");
+    if (!w_down) w_down = get_optional_w(currentWeightTensors, "mlp.down.weight");
+
+    struct ggml_tensor* w_up = get_optional_w(currentWeightTensors, "ffn_up.weight");
+    if (!w_up) w_up = get_optional_w(currentWeightTensors, "mlp.dense_h_to_4h.weight");
+    if (!w_up) w_up = get_optional_w(currentWeightTensors, "mlp.up.weight");
+    
+    // QK-Norm weights (Optional)
+    struct ggml_tensor* w_q_norm = get_optional_w(currentWeightTensors, "attn_q_norm.weight");
+    struct ggml_tensor* w_k_norm = get_optional_w(currentWeightTensors, "attn_k_norm.weight");
+    
+    // Optional biases
+    struct ggml_tensor* b_q = get_optional_w(currentWeightTensors, "attn_q.bias");
+    struct ggml_tensor* b_k = get_optional_w(currentWeightTensors, "attn_k.bias");
+    struct ggml_tensor* b_v = get_optional_w(currentWeightTensors, "attn_v.bias");
+    
+    struct ggml_tensor* b_qkv = get_optional_w(currentWeightTensors, "attn_qkv.bias");
+    if (!b_qkv) b_qkv = get_optional_w(currentWeightTensors, "attention.query_key_value.bias");
+
+    struct ggml_tensor* b_o = get_optional_w(currentWeightTensors, "attn_output.bias");
+    if (!b_o) b_o = get_optional_w(currentWeightTensors, "attention.dense.bias");
+
+    struct ggml_tensor* b_up = get_optional_w(currentWeightTensors, "ffn_up.bias");
+    if (!b_up) b_up = get_optional_w(currentWeightTensors, "mlp.dense_h_to_4h.bias");
+    if (!b_up) b_up = get_optional_w(currentWeightTensors, "mlp.up.bias");
+
+    struct ggml_tensor* b_down = get_optional_w(currentWeightTensors, "ffn_down.bias");
+    if (!b_down) b_down = get_optional_w(currentWeightTensors, "mlp.dense_4h_to_h.bias");
+    if (!b_down) b_down = get_optional_w(currentWeightTensors, "mlp.down.bias");
+
+    // Handle merged QKV for GPT-NeoX
+    // Handle merged QKV for GPT-NeoX / GPT-OSS
+    if (w_qkv && !w_q) {
+        // Calculate GQA dimensions
+        int dim_q = n_head * head_dim;
+        int dim_kv = n_head_kv * head_dim; // For GQA, this is < n_embd
+
+        // Q: [n_embd, dim_q]
+        w_q = ggml_view_2d(ctx_weights, w_qkv, n_embd, dim_q, w_qkv->nb[1], 0);
+        
+        // K: [n_embd, dim_kv] - Offset is dim_q bytes (accross the sliced dimension)
+        // Note: Slicing happens on the second dimension from the host perspective, 
+        // but ggml tensor ne[0] is correct.
+        // Wait, w_qkv is [n_embd, total_dim].
+        // We want to verify offsets.
+        // Offset = dim_q columns * stride? No.
+        // If w_qkv is [n_embd, total_dim]. Stride nb[1] steps to next row of n_embd elements.
+        // So offset should be dim_q * nb[1]? NO.
+        // We are slicing ROWS.
+        // Offset of row X is X * nb[1].
+        // But dim_q is number of ROWS.
+        // So K starts at row dim_q.
+        // Offset = dim_q * nb[1].
+        
+        // Let's re-verify standard ggml.
+        // Weights: [n_embd, n_out].
+        // w_q: [n_embd, dim_q]. Offset 0.
+        // w_k: [n_embd, dim_kv]. Offset dim_q * nb[1].
+        
+        // My previous code:
+        // offset: dim_q * type_size.
+        // This suggests offset was calculated as if iterating contiguous memory?
+        // nb[1] is usually n_embd * type_size.
+        // So dim_q * nb[1] is correct offset for "dim_q rows".
+        
+        // Correct View calls:
+        w_q = ggml_view_2d(ctx_weights, w_qkv, n_embd, dim_q, w_qkv->nb[1], 0);
+        
+        size_t off_k = (size_t)dim_q * w_qkv->nb[1];
+        w_k = ggml_view_2d(ctx_weights, w_qkv, n_embd, dim_kv, w_qkv->nb[1], off_k);
+        
+        size_t off_v = (size_t)(dim_q + dim_kv) * w_qkv->nb[1];
+        w_v = ggml_view_2d(ctx_weights, w_qkv, n_embd, dim_kv, w_qkv->nb[1], off_v);
+        
+        if (b_qkv) {
+             b_q = ggml_view_1d(ctx_weights, b_qkv, dim_q, 0);
+             b_k = ggml_view_1d(ctx_weights, b_qkv, dim_kv, dim_q * sizeof(float));
+             b_v = ggml_view_1d(ctx_weights, b_qkv, dim_kv, (dim_q + dim_kv) * sizeof(float));
+        }
+    }
+    
+    if (!w_attn_norm || !w_q || !w_k || !w_v || !w_o || !w_up || !w_down) {
+        LOGE("Forward: Missing weights for layer %d w_up=%p w_down=%p", layerIndex, w_up, w_down);
         return nullptr;
     }
 
+
     // Build Graph in ctx_build
     
-    // 1. RMS Norm
+    // 1. Attention Norm
     struct ggml_tensor* inpL = cur; 
-    cur = ggml_rms_norm(ctx_build, cur, norm_rms_eps);
+    
+    if (model_arch_type == ARCH_GPTNEOX) {
+        cur = ggml_norm(ctx_build, cur, model_rms_norm_eps);
+    } else {
+        cur = ggml_rms_norm(ctx_build, cur, model_rms_norm_eps);
+    }
     cur = ggml_mul(ctx_build, cur, w_attn_norm);
     
+    // DEBUG: Log weight dimensions
+    if (w_q) LOGI("L%d Trace: w_q dims=[%ld, %ld]", layerIndex, w_q->ne[0], w_q->ne[1]);
+    if (w_k) LOGI("L%d Trace: w_k dims=[%ld, %ld]", layerIndex, w_k->ne[0], w_k->ne[1]);
+    if (w_v) LOGI("L%d Trace: w_v dims=[%ld, %ld]", layerIndex, w_v->ne[0], w_v->ne[1]);
+    
+    // Check for GQA mismatch (Metadata says GQA, weights say MHA)
+    if (w_q && w_k && w_q->ne[1] == w_k->ne[1] && n_head != n_head_kv) {
+        LOGW("L%d Trace: GQA mismatch! Metadata n_head_kv=%d but w_k matches w_q size. Forcing MHA (n_head_kv=%d).", 
+             layerIndex, n_head_kv, n_head);
+        n_head_kv = n_head;
+    }
+
     // 2. QKV
     struct ggml_tensor* Q = ggml_mul_mat(ctx_build, w_q, cur);
     struct ggml_tensor* K = ggml_mul_mat(ctx_build, w_k, cur);
     struct ggml_tensor* V = ggml_mul_mat(ctx_build, w_v, cur);
     
-    // Add biases if present (critical for Qwen2/Qwen3)
+    // Apply bias
     if (b_q) Q = ggml_add(ctx_build, Q, b_q);
     if (b_k) K = ggml_add(ctx_build, K, b_k);
     if (b_v) V = ggml_add(ctx_build, V, b_v);
+    
+    Q = ggml_cont(ctx_build, Q);
+    K = ggml_cont(ctx_build, K);
+    V = ggml_cont(ctx_build, V);
     
     // QK-Norm (Qwen2/3)
     if (w_q_norm) {
@@ -891,7 +1050,7 @@ struct ggml_tensor* TrueLargeRuntime::forwardLayer(int layerIndex, struct ggml_t
     Q = ggml_reshape_3d(ctx_build, Q, head_dim, n_head, n_tokens); // [head_dim, n_head, n_tokens]
     K = ggml_reshape_3d(ctx_build, K, head_dim, n_head_kv, n_tokens); // [head_dim, n_head_kv, n_tokens]
     V = ggml_reshape_3d(ctx_build, V, head_dim, n_head_kv, n_tokens); // [head_dim, n_head_kv, n_tokens]
-    // LOGI("L%d Trace: Reshaped 3D (ne[2]=%ld)", layerIndex, Q->ne[2]);
+    LOGI("L%d Trace: Reshaped 3D. Q->ne[2]=%ld", layerIndex, Q->ne[2]);
     
     // 3. RoPE
     // ggml_rope_ext expects sequence length in ne[2]
@@ -900,17 +1059,32 @@ struct ggml_tensor* TrueLargeRuntime::forwardLayer(int layerIndex, struct ggml_t
         ((int32_t*)pos->data)[i] = nPast + i;
     }
     
-    Q = ggml_rope_ext(ctx_build, Q, pos, nullptr, head_dim, rope_mode, 0, freq_base, freq_scale, 0, 1.0f, 0.0f, 0.0f);
-    K = ggml_rope_ext(ctx_build, K, pos, nullptr, head_dim, rope_mode, 0, freq_base, freq_scale, 0, 1.0f, 0.0f, 0.0f);
-    // LOGI("L%d Trace: RoPE done", layerIndex);
+    // Check if n_rot is available (partial rotary)
+    int n_dims_rope = (model_n_rot > 0) ? model_n_rot : head_dim;
+    
+    // Ensure even n_dims for RoPE
+    if (n_dims_rope % 2 != 0) {
+        LOGE("L%d Trace: RoPE n_dims (%d) is ODD! Adjusting to even...", layerIndex, n_dims_rope);
+        n_dims_rope -= 1; // Hack: drop last dimension from rotation?
+        // Or if n_rot was 0 and head_dim is 45.
+        // If we use 44, it might work but be slightly wrong. Better than crash.
+    }
+    
+    Q = ggml_rope_ext(ctx_build, Q, pos, nullptr, n_dims_rope, rope_mode, 0, freq_base, freq_scale, 0, 1.0f, 0.0f, 0.0f);
+    K = ggml_rope_ext(ctx_build, K, pos, nullptr, n_dims_rope, rope_mode, 0, freq_base, freq_scale, 0, 1.0f, 0.0f, 0.0f);
+    LOGI("L%d Trace: RoPE done (n_dims=%d)", layerIndex, n_dims_rope);
     
     // Now permute K, V, Q to [head_dim, tokens, heads] for consistent layout
     // Move ne[2] (tokens) to ne[1], and ne[1] (heads) to ne[2]
+    // 4. Attention (Final logic aligned with standard Llama architecture)
+    // CRITICAL FIX: The previous attempt to remove permute caused Q=[64,64,24] vs K=[64,24,64] crash.
+    // Attention requires [dim, seq, heads] layout to produce [seq, seq, heads] scores.
+    // RoPE output is [dim, heads, seq]. We MUST permute to [dim, seq, heads].
     Q = ggml_permute(ctx_build, Q, 0, 2, 1, 3);
     K = ggml_permute(ctx_build, K, 0, 2, 1, 3);
     V = ggml_permute(ctx_build, V, 0, 2, 1, 3); 
-    // LOGI("L%d Trace: Permuted to [dim, seq, heads]", layerIndex);
-    
+    LOGI("L%d Trace: Permuted to [dim, seq, heads] for Attention", layerIndex);
+
     // --- KV Store & Attention ---
     struct ggml_tensor* K_history = nullptr;
     struct ggml_tensor* V_history = nullptr;
@@ -967,70 +1141,178 @@ struct ggml_tensor* TrueLargeRuntime::forwardLayer(int layerIndex, struct ggml_t
     struct ggml_tensor* K_cur = K_history;
     struct ggml_tensor* V_cur = V_history;
 
+    LOGI("Debug: Pre-GQA. n_head=%d, n_head_kv=%d", n_head, n_head_kv);
+    if (K_cur) LOGI("Debug: K_cur is valid. dims=[%ld, %ld, %ld, %ld]", K_cur->ne[0], K_cur->ne[1], K_cur->ne[2], K_cur->ne[3]);
+    else LOGE("Debug: K_cur is NULL!");
+
     // Broadcasting for GQA if needed
     if (n_head_kv != n_head) {
         int n_group = n_head / n_head_kv;
+        LOGI_GQA("GQA Debug: n_head=%d, n_head_kv=%d, n_group=%d, head_dim=%d", n_head, n_head_kv, n_group, head_dim);
+        LOGI_GQA("GQA Debug: nPast=%d, n_tokens=%d", nPast, n_tokens);
+        LOGI_GQA("GQA Debug: K_cur dims=[%ld, %ld, %ld, %ld]", K_cur->ne[0], K_cur->ne[1], K_cur->ne[2], K_cur->ne[3]);
+        
+        
+        // K: [head_dim, n_tokens, n_head_kv] -> [head_dim, n_tokens, n_head_kv, 1]
+        // Repeat to [head_dim, n_tokens, n_head_kv, n_group]
+        // Then reshape/permute to [head_dim, n_tokens, n_head]
+        
+        // Correct approach:
+        // K is [head_dim, n_tokens, n_head_kv]
+        // 1. Reshape to [head_dim, n_tokens, n_head_kv, 1]
+        K_cur = ggml_reshape_4d(ctx_build, K_cur, head_dim, nPast + n_tokens, n_head_kv, 1);
+        // 2. Repeat to [..., n_group]
+        K_cur = ggml_repeat(ctx_build, K_cur, ggml_new_tensor_4d(ctx_build, K_cur->type, head_dim, nPast + n_tokens, n_head_kv, n_group));
+        // 3. Reshape 3D to [head_dim, n_tokens, n_head]
+        // Note: ggml_repeat repeats the last dim.
+        // We need to ensure the logical layout is correct.
+        // If we want [head_dim, n_tokens, n_head], we need "n_head" to be the outer dim.
+        // But K_cur internal layout is usually [head_dim, n_tokens, n_head].
+        
+        // Let's use standard llama.cpp way:
+        // K: [head_dim, n_tokens, n_head_kv]
+        // Permute to [head_dim, n_head_kv, n_tokens]? No.
+        
+        // Simplified GQA without complex permutes for now (safer):
+        // Reshape K to [head_dim, n_tokens, n_head_kv, 1]
+        // Repeat to [head_dim, n_tokens, n_head_kv, n_group]
+        // Reshape to [head_dim, n_tokens, n_head] might be tricky if memory not contiguous.
+        
+        // Actually, if we just want to broadcast, we can use ggml_repeat on the *mask* or modify KQ?
+        // No, we need K expanded.
+        
+        // K: [head_dim, seq, n_head_kv] -> [head_dim, seq, 1, n_head_kv]
+        // Repeat ne[2] to n_group -> [head_dim, seq, n_group, n_head_kv]
+        // Reshape to [head_dim, seq, n_head]
+        
+        LOGI_GQA("GQA Step K0: Make Contiguous");
         K_cur = ggml_cont(ctx_build, K_cur);
-        K_cur = ggml_reshape_4d(ctx_build, K_cur, head_dim, nPast + n_tokens, 1, n_head_kv);
-        K_cur = ggml_repeat(ctx_build, K_cur, ggml_new_tensor_4d(ctx_build, K_cur->type, head_dim, nPast + n_tokens, n_group, n_head_kv));
-        K_cur = ggml_reshape_3d(ctx_build, K_cur, head_dim, nPast + n_tokens, n_head);
 
+        LOGI_GQA("GQA Step K1: Reshape 4D (Blocked Setup)");
+        K_cur = ggml_reshape_4d(ctx_build, K_cur, head_dim, nPast + n_tokens, 1, n_head_kv);
+        
+        LOGI_GQA("GQA Step K2: New Tensor 4D (Rep Group)");
+        struct ggml_tensor* K_rep = ggml_new_tensor_4d(ctx_build, K_cur->type, head_dim, nPast + n_tokens, n_group, n_head_kv);
+        
+        LOGI_GQA("GQA Step K3: Repeat");
+        K_cur = ggml_repeat(ctx_build, K_cur, K_rep);
+        
+        LOGI_GQA("GQA Step K4: Cont");
+        K_cur = ggml_cont(ctx_build, K_cur);
+        
+        LOGI_GQA("GQA Step K5: Reshape 3D (Final Heads)");
+        K_cur = ggml_reshape_3d(ctx_build, K_cur, head_dim, nPast + n_tokens, n_head);
+        
+        LOGI_GQA("GQA Step V: Start");
         V_cur = ggml_cont(ctx_build, V_cur);
         V_cur = ggml_reshape_4d(ctx_build, V_cur, head_dim, nPast + n_tokens, 1, n_head_kv);
-        V_cur = ggml_repeat(ctx_build, V_cur, ggml_new_tensor_4d(ctx_build, V_cur->type, head_dim, nPast + n_tokens, n_group, n_head_kv));
+        struct ggml_tensor* V_rep = ggml_new_tensor_4d(ctx_build, V_cur->type, head_dim, nPast + n_tokens, n_group, n_head_kv);
+        V_cur = ggml_repeat(ctx_build, V_cur, V_rep);
+        V_cur = ggml_cont(ctx_build, V_cur);
         V_cur = ggml_reshape_3d(ctx_build, V_cur, head_dim, nPast + n_tokens, n_head);
+        LOGI_GQA("GQA Step: Done");
     }
     
     // Contiguity for multiplication stability
     K_cur = ggml_cont(ctx_build, K_cur);
     V_cur = ggml_cont(ctx_build, V_cur);
+    
+    if (!K_cur) { LOGE("Error: K_cur is NULL after final cont!"); return nullptr; }
+    if (!V_cur) { LOGE("Error: V_cur is NULL after final cont!"); return nullptr; }
+    if (!Q_cur) { LOGE("Error: Q_cur is NULL!"); return nullptr; }
 
-    // Score: [history, tokens, heads]
+    LOGI_GQA("Debug: Invoking mul_mat(K, Q). K=[%ld,%ld,%ld], Q=[%ld,%ld,%ld]", 
+             K_cur->ne[0], K_cur->ne[1], K_cur->ne[2],
+             Q_cur->ne[0], Q_cur->ne[1], Q_cur->ne[2]);
+    LOGI_GQA("Debug: K type=%d, Q type=%d", K_cur->type, Q_cur->type);
+
+    // scoring
+    LOGI_GQA("Attn Trace: mul_mat(K, Q)");
     struct ggml_tensor* KQ = ggml_mul_mat(ctx_build, K_cur, Q_cur); 
+    LOGI_GQA("Attn Trace: scale");
     KQ = ggml_scale(ctx_build, KQ, 1.0f / sqrtf((float)head_dim));
     
     if (n_tokens > 1) {
+        LOGI_GQA("Attn Trace: diag_mask_inf");
         KQ = ggml_diag_mask_inf(ctx_build, KQ, nPast);
     }
 
+    LOGI_GQA("Attn Trace: soft_max");
     struct ggml_tensor* KQ_soft = ggml_soft_max(ctx_build, KQ);
     
-    // Result Projection: [history, dim, heads] * [history, tokens, heads] -> [dim, tokens, heads]
+    // Result Projection
+    LOGI_GQA("Attn Trace: permute V_cur");
     struct ggml_tensor* V_trans = ggml_permute(ctx_build, V_cur, 1, 0, 2, 3);
+    LOGI_GQA("Attn Trace: cont V_trans");
     V_trans = ggml_cont(ctx_build, V_trans); 
+    LOGI_GQA("Attn Trace: cont KQ_soft");
     KQ_soft = ggml_cont(ctx_build, KQ_soft);
 
+    LOGI_GQA("Attn Trace: mul_mat(V_trans, KQ_soft)");
     struct ggml_tensor* V_out = ggml_mul_mat(ctx_build, V_trans, KQ_soft); 
     
-    // Reshape for next layer: [dim, heads, tokens]
+    LOGI_GQA("Attn Trace: permute V_out");
     V_out = ggml_permute(ctx_build, V_out, 0, 2, 1, 3); 
+    LOGI_GQA("Attn Trace: cont V_out");
     V_out = ggml_cont(ctx_build, V_out);
-    V_out = ggml_reshape_2d(ctx_build, V_out, n_embd, n_tokens); 
+    LOGI_GQA("Attn Trace: reshape_2d V_out to [%d, %d]", n_head * head_dim, n_tokens);
+    V_out = ggml_reshape_2d(ctx_build, V_out, n_head * head_dim, n_tokens); 
     
+    LOGI_GQA("Attn Trace: mul_mat(w_o, V_out) w_o=[%ld,%ld], V_out=[%ld,%ld]", 
+             w_o->ne[0], w_o->ne[1], V_out->ne[0], V_out->ne[1]);
     struct ggml_tensor* attn_out = ggml_mul_mat(ctx_build, w_o, V_out);
-    // LOGI("L%d Attn Complete Trace: ne0=%ld, ne1=%ld", layerIndex, attn_out->ne[0], attn_out->ne[1]);
+    if (b_o) attn_out = ggml_add(ctx_build, attn_out, b_o);
+    
+    if (model_parallel_residual) {
 
-    
-    struct ggml_tensor* cur_res = ggml_add(ctx_build, attn_out, inpL);
-    
-    // FFN
-    struct ggml_tensor* ffn_inp = cur_res; 
-    cur_res = ggml_rms_norm(ctx_build, cur_res, norm_rms_eps);
-    cur_res = ggml_mul(ctx_build, cur_res, w_ffn_norm);
-    
-    struct ggml_tensor* gate = ggml_mul_mat(ctx_build, w_gate, cur_res);
-    gate = ggml_silu(ctx_build, gate);
-    struct ggml_tensor* up = ggml_mul_mat(ctx_build, w_up, cur_res);
-    
-    struct ggml_tensor* ffn_mid = ggml_mul(ctx_build, gate, up);
-    struct ggml_tensor* ffn_out = ggml_mul_mat(ctx_build, w_down, ffn_mid);
-    // LOGI("L%d Trace: FFN done", layerIndex);
-    
-    // Final Residual (kv_dep already injected in attention scores)
-    struct ggml_tensor* result = ggml_add(ctx_build, ffn_out, ffn_inp);
-    
-    // LOGI("L%d Trace: Layer Complete", layerIndex);
-    return result;
+        // x = x + attn(norm(x)) + ffn(norm(x))
+        struct ggml_tensor* ffn_norm_out = cur;
+        if (w_ffn_norm) {
+            ffn_norm_out = ggml_norm(ctx_build, inpL, model_rms_norm_eps);
+            ffn_norm_out = ggml_mul(ctx_build, ffn_norm_out, w_ffn_norm);
+        }
+        
+        struct ggml_tensor* ffn_out;
+        if (w_gate) {
+            struct ggml_tensor* gate = ggml_mul_mat(ctx_build, w_gate, ffn_norm_out);
+            gate = ggml_silu(ctx_build, gate);
+            struct ggml_tensor* up = ggml_mul_mat(ctx_build, w_up, ffn_norm_out);
+            ffn_out = ggml_mul(ctx_build, gate, up);
+        } else {
+            ffn_out = ggml_mul_mat(ctx_build, w_up, ffn_norm_out);
+            if (b_up) ffn_out = ggml_add(ctx_build, ffn_out, b_up);
+            ffn_out = ggml_gelu(ctx_build, ffn_out);
+        }
+        
+        ffn_out = ggml_mul_mat(ctx_build, w_down, ffn_out);
+        if (b_down) ffn_out = ggml_add(ctx_build, ffn_out, b_down);
+
+        return ggml_add(ctx_build, inpL, ggml_add(ctx_build, attn_out, ffn_out));
+    } else {
+        // Sequential Residual (Llama pattern)
+        struct ggml_tensor* cur_res = ggml_add(ctx_build, attn_out, inpL);
+        
+        struct ggml_tensor* ffn_inp = cur_res; 
+        cur_res = ggml_rms_norm(ctx_build, cur_res, norm_rms_eps);
+        cur_res = ggml_mul(ctx_build, cur_res, w_ffn_norm);
+        
+        struct ggml_tensor* ffn_out;
+        if (w_gate) {
+            struct ggml_tensor* gate = ggml_mul_mat(ctx_build, w_gate, cur_res);
+            gate = ggml_silu(ctx_build, gate);
+            struct ggml_tensor* up = ggml_mul_mat(ctx_build, w_up, cur_res);
+            ffn_out = ggml_mul(ctx_build, gate, up);
+        } else {
+            ffn_out = ggml_mul_mat(ctx_build, w_up, cur_res);
+            if (b_up) ffn_out = ggml_add(ctx_build, ffn_out, b_up);
+            ffn_out = ggml_gelu(ctx_build, ffn_out);
+        }
+        
+        ffn_out = ggml_mul_mat(ctx_build, w_down, ffn_out);
+        if (b_down) ffn_out = ggml_add(ctx_build, ffn_out, b_down);
+        
+        return ggml_add(ctx_build, ffn_out, ffn_inp);
+    }
 }
 
 std::string TrueLargeRuntime::step_lbl() {
@@ -1068,7 +1350,9 @@ std::string TrueLargeRuntime::step_lbl() {
 
     // 2. Prepare embedding
     ggml_free(ctx_compute);
-    struct ggml_init_params params = { .mem_size = 32*1024*1024, .mem_buffer = NULL };
+    ggml_set_abort_callback(custom_ggml_abort_callback);
+    // Increase prompt context size to 2GB for GQA/MoE nodes and MXFP4 additions
+    struct ggml_init_params params = { .mem_size = 2048LL*1024*1024, .mem_buffer = NULL };
     ctx_compute = ggml_init(params);
     
     struct ggml_tensor* input = nullptr;
@@ -1081,9 +1365,23 @@ std::string TrueLargeRuntime::step_lbl() {
          input = ggml_get_rows(ctx_compute, w_token_embd, idx);
          
          // CRITICAL: Compute the embedding graph before forwarding to layers
-         struct ggml_cgraph* gf_emb = ggml_new_graph(ctx_compute);
+         struct ggml_cgraph* gf_emb = ggml_new_graph_custom(ctx_compute, 8192, false);
          ggml_build_forward_expand(gf_emb, input);
          ggml_graph_compute_with_ctx(ctx_compute, gf_emb, nThreads);
+         
+         LOGI("LBL Step: Embedding computed. Type=%d", input->type);
+
+         // Force F32 if input is quantized (e.g. Q8_0) because norms/RoPE expect F32
+         if (input->type != GGML_TYPE_F32) {
+             LOGI("LBL Step: Converting input from type %d to F32", input->type);
+             struct ggml_tensor* input_f32 = ggml_new_tensor_1d(ctx_compute, GGML_TYPE_F32, input->ne[0]);
+             // Use ggml_cpy to dequantize
+             struct ggml_cgraph* gf_cast = ggml_new_graph_custom(ctx_compute, 8192, false);
+             input_f32 = ggml_cpy(ctx_compute, input, input_f32);
+             ggml_build_forward_expand(gf_cast, input_f32);
+             ggml_graph_compute_with_ctx(ctx_compute, gf_cast, nThreads);
+             input = input_f32;
+         }
     } else {
         LOGE("Global weights missing (token_embd). Using 0s.");
         int n_embd = llama_model_n_embd(model);
@@ -1112,7 +1410,7 @@ std::string TrueLargeRuntime::step_lbl() {
         }
         
         // Compute
-        struct ggml_cgraph* gf = ggml_new_graph(ctx_next);
+        struct ggml_cgraph* gf = ggml_new_graph_custom(ctx_next, 8192, false);
         ggml_build_forward_expand(gf, out);
         ggml_graph_compute_with_ctx(ctx_next, gf, nThreads);
         
@@ -1133,7 +1431,11 @@ std::string TrueLargeRuntime::step_lbl() {
          struct ggml_tensor* cur = input;
          
          // Norm
-         cur = ggml_rms_norm(ctx_curr, cur, model_rms_norm_eps);
+         if (model_arch_type == ARCH_GPTNEOX) {
+             cur = ggml_norm(ctx_curr, cur, model_rms_norm_eps);
+         } else {
+             cur = ggml_rms_norm(ctx_curr, cur, model_rms_norm_eps);
+         }
          cur = ggml_mul(ctx_curr, cur, w_output_norm);
          
          // Head (Logits)
@@ -1152,7 +1454,7 @@ std::string TrueLargeRuntime::step_lbl() {
          // LOGI("DIAG Final Proj: ...", ...);
          
          // Compute final
-         struct ggml_cgraph* gf_final = ggml_new_graph(ctx_curr);
+         struct ggml_cgraph* gf_final = ggml_new_graph_custom(ctx_curr, 8192, false);
          ggml_build_forward_expand(gf_final, logits);
          ggml_graph_compute_with_ctx(ctx_curr, gf_final, nThreads);
          
@@ -1250,6 +1552,11 @@ void TrueLargeRuntime::initLayerWeights(int layerIndex) {
     for (const auto& tp : info->tensors) {
         const TensorInfo& t = tp.second;
         
+        // Log all suffixes for layer 0 to help debug missing weights
+        if (layerIndex == 0) {
+            LOGI("Layer 0 Tensor: Suffix='%s', FullName='%s'", tp.first.c_str(), t.name.c_str());
+        }
+
         // Setup shape
         struct ggml_tensor* tensor = nullptr;
         
@@ -1287,5 +1594,7 @@ void TrueLargeRuntime::initLayerWeights(int layerIndex) {
             currentWeightTensors[suffix] = tensor;
         }
     }
+
+
 }
 

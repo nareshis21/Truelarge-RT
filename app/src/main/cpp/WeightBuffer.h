@@ -20,13 +20,12 @@ public:
     // Allocate memory for the buffer
     bool allocate(size_t size);
 
+    // Adopt an already mapped pointer (Zero-Copy)
+    void adoptMmap(void* ptr, size_t size, void* realMapPtr, size_t realMapSize);
+
     // Load data into the buffer from a source pointer
-    // This typically triggers the page faults if src is mmapped
     void loadFrom(const void* src, size_t size);
-
-    // Load data at specific offset (for packing tensors)
-    void loadAt(size_t offset, const void* src, size_t size);
-
+    
     // Release the memory
     void release();
 
@@ -42,6 +41,11 @@ public:
 private:
     void* buffer = nullptr;
     size_t size = 0;
+    
+    // For mmap tracking
+    void* mapPtr = nullptr;
+    size_t mapSize = 0;
+    bool isMmap = false;
 };
 
 #endif // WEIGHT_BUFFER_H

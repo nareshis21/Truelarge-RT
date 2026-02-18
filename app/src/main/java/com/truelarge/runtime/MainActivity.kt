@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -52,7 +53,7 @@ class MainActivity : ComponentActivity() {
 
     private val engine = NativeEngine()
     private lateinit var modelRepository: ModelRepository
-    private val downloadManager = ModelDownloadManager()
+    private lateinit var downloadManager: ModelDownloadManager
 
     private val storagePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -62,6 +63,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         modelRepository = ModelRepository(this)
+        downloadManager = ModelDownloadManager(this)
         requestStoragePermissions()
 
         setContent {
@@ -123,6 +125,7 @@ fun AppNavigation(
             CatalogScreen(
                 modelRepository = modelRepository,
                 onSearchClick = { navController.navigate("search") },
+                onDownloadsClick = { navController.navigate("downloads") },
                 onModelSelect = { targetPath, draftPath ->
                     val encodedTarget = URLEncoder.encode(targetPath, "UTF-8")
                     val route = if (draftPath != null) {
@@ -197,7 +200,13 @@ fun AppNavigation(
             InferenceScreen(
                 engine = engine,
                 modelPath = modelPath,
-                modelRepository = modelRepository,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable("downloads") {
+            com.truelarge.runtime.ui.DownloadScreen(
+                downloadManager = downloadManager,
                 onBack = { navController.popBackStack() }
             )
         }
@@ -209,7 +218,6 @@ fun AppNavigation(
 fun InferenceScreen(
     engine: NativeEngine,
     modelPath: String,
-    modelRepository: ModelRepository,
     onBack: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -227,6 +235,7 @@ fun InferenceScreen(
     var maxTokens by remember { mutableStateOf(256f) }
     var contextTrain by remember { mutableIntStateOf(0) }
     var tps by remember { mutableStateOf(0.0) }
+    var inferenceMode by remember { mutableStateOf("Unknown") }
 
     // Load model on start
     LaunchedEffect(modelPath) {
@@ -235,6 +244,7 @@ fun InferenceScreen(
             val ok = engine.init(modelPath, 4, 0)
             if (ok) {
                 contextTrain = engine.getContextTrain()
+                inferenceMode = engine.getInferenceMode()
                 withContext(Dispatchers.Main) {
                     status = "Model loaded"
                     isRunning = true
@@ -265,7 +275,7 @@ fun InferenceScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
                 },
                 actions = {
@@ -313,6 +323,14 @@ fun InferenceScreen(
                             text = "Context Window: $contextTrain tokens",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (isRunning) {
+                        Text(
+                            text = "Engine: $inferenceMode",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }

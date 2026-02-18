@@ -219,17 +219,23 @@ bool GGUFHeaderParser::parse() {
 }
 
 int GGUFHeaderParser::parseTensorName(const std::string& name, std::string& suffix) {
-    // Expected format: blk.N.suffix
-    // If not, returns -1 and suffix = name (Global)
+    // Expected format: blk.N.suffix or layers.N.suffix or model.layers.N.suffix
     size_t run = name.find("blk.");
+    if (run == std::string::npos) run = name.find("layers.");
+    if (run == std::string::npos) run = name.find("model.layers.");
+    
     if (run != std::string::npos) {
-        size_t startNum = run + 4;
+        size_t startNum;
+        if (name.compare(run, 4, "blk.") == 0) startNum = run + 4;
+        else if (name.compare(run, 7, "layers.") == 0) startNum = run + 7;
+        else startNum = run + 13; // model.layers.
+
         size_t endNum = name.find('.', startNum);
         if (endNum != std::string::npos) {
             std::string num = name.substr(startNum, endNum - startNum);
             try {
                 int index = std::stoi(num);
-                suffix = name.substr(endNum + 1); // everything after "blk.N."
+                suffix = name.substr(endNum + 1); // everything after the last dot in the prefix
                 return index;
             } catch (...) {
                 // Fallthrough

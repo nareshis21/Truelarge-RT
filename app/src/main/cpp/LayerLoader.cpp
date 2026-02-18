@@ -33,33 +33,31 @@ bool LayerLoader::init() {
 }
 
 void* LayerLoader::loadLayer(size_t offset, size_t size) {
+    LayerMap lm = loadLayerMap(offset, size);
+    return lm.data;
+}
+
+LayerMap LayerLoader::loadLayerMap(size_t offset, size_t size) {
+    LayerMap lm;
     if (fd == -1) {
-        std::cerr << "LayerLoader: File not initialized!" << std::endl;
-        return nullptr;
+        return lm;
     }
 
-    // mmap requires offset to be aligned to page size
     size_t alignedOffset = (offset / pageSize) * pageSize;
     size_t diff = offset - alignedOffset;
     size_t mapSize = size + diff;
 
-    // Use MAP_PRIVATE | MAP_POPULATE if available to pre-fault pages (optimization)
-    // On Android MAP_POPULATE might not be available or needed effectively for separate layers
-    // PROT_READ is sufficient.
     void* mapPtr = mmap(NULL, mapSize, PROT_READ, MAP_PRIVATE, fd, alignedOffset);
 
     if (mapPtr == MAP_FAILED) {
-        std::cerr << "LayerLoader: mmap failed: " << strerror(errno) 
-                  << " (Offset: " << offset << ", Size: " << size << ")" << std::endl;
-        return nullptr;
+        return lm;
     }
 
-    // Advise OS that we will need this data (prefetch)
-    // madvise(mapPtr, mapSize, MADV_WILLNEED);
-    // madvise(mapPtr, mapSize, MADV_SEQUENTIAL);
-
-    // Return pointer adjusted for alignment
-    return static_cast<char*>(mapPtr) + diff;
+    lm.data = static_cast<char*>(mapPtr) + diff;
+    lm.size = size;
+    lm.fullMapPtr = mapPtr;
+    lm.fullMapSize = mapSize;
+    return lm;
 }
 
 void LayerLoader::unloadLayer(void* ptr, size_t size) {
