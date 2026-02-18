@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>TrueLarge-RT <img src="docs/app_icon.png" width="48" style="vertical-align: middle; border-radius: 50%;"></h1>
+  <h1>TrueLarge-RT <img src="docs/app_icon_circle.png" width="48" style="vertical-align: middle;"></h1>
 </div>
 
 <div align="center">
