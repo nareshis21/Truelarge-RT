@@ -159,7 +159,7 @@ To hide latency, TrueLarge-RT maintains two lightweight compute contexts (`ctx_p
 
 ## Performance Benchmark
 
-Actual performance on **Pixel 7 Pro (8GB RAM)**:
+Actual performance on **Reference Device (8GB RAM)**:
 
 > **Note**: Official benchmark data for v1.0 is currently being compiled and will be released shortly.
 
