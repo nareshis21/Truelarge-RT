@@ -1,4 +1,6 @@
-# TrueLarge-RT <img src="docs/app_icon.png" width="48" style="vertical-align: middle;">
+<div align="center">
+  <h1>TrueLarge-RT <img src="docs/app_icon.png" width="48" style="vertical-align: middle; border-radius: 50%;"></h1>
+</div>
 
 <div align="center">
 <img src="docs/new_arch.png" width="800px">
