@@ -281,6 +281,7 @@ fun InferenceScreen(
                 actions = {
                     if (messages.isNotEmpty()) {
                         TextButton(onClick = {
+                            isGenerating = false // Stop generation immediately
                             messages.clear()
                             status = "Session cleared"
                             scope.launch {

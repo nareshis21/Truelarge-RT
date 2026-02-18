@@ -101,6 +101,9 @@ TrueLargeRuntime::~TrueLargeRuntime() {
 }
 
 bool TrueLargeRuntime::loadModel(const std::string& path) {
+    // Release any existing model/context to prevent leaks
+    release();
+    
     modelPath = path;
     
     // Log build info
