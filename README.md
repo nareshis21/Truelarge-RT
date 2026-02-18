@@ -185,6 +185,13 @@ Actual performance on **Reference Device (8GB RAM)**:
 > **Note**: Official benchmark data for v1.0 is currently being compiled and will be released shortly.
 
 
+## 🐍 Python Utilities
+
+We provide scripts for repository maintenance and model conversion. See the [Scripts README](scripts/README.md) for details on:
+*   **Asset Optimization**: Auto-crop icons and compress images.
+*   **Model Conversion**: Convert HuggingFace models to GGUF format.
+*   **Structured Output**: Generate GBNF grammars from JSON schemas.
+
 ## Acknowledgements
 
 - [llama.cpp](https://github.com/ggerganov/llama.cpp): The core tensor library.
