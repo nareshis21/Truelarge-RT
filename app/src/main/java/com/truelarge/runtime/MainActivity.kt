@@ -428,9 +428,12 @@ fun InferenceScreen(
                                 val keepHistory = messages.size > 2
                                 // System Prompt Injection
                                 val promptToSend = if (!keepHistory) {
-                                    "System: You are a helpful AI assistant. Answer concisely.\n\nUser: $currentPrompt\nAI:"
+                                    "<|im_start|>system\nYou are a helpful AI assistant. Answer concisely.<|im_end|>\n" +
+                                    "<|im_start|>user\n$currentPrompt<|im_end|>\n" + 
+                                    "<|im_start|>assistant\n"
                                 } else {
-                                    "User: $currentPrompt\nAI:"
+                                    "<|im_start|>user\n$currentPrompt<|im_end|>\n" +
+                                    "<|im_start|>assistant\n"
                                 }
 
                                 withContext(Dispatchers.IO) {
@@ -450,14 +453,16 @@ fun InferenceScreen(
                                             tokenCount++
                                             responseBytes.addAll(pieceBytes.toList())
                                             val currentString = String(responseBytes.toByteArray(), Charsets.UTF_8)
+                                            val filteredString = currentString
+                                                .replace("<|im_end|>", "")
+                                                .replace("<|im_start|>", "")
+                                                .trimEnd()
+                                                
                                             val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
                                             
                                             withContext(Dispatchers.Main) {
-                                                // Update the LAST message (AI) in place
-                                                // Trigger recomposition by replacing the item or using mutable state inside?
-                                                // For SnapshotStateList, setting item at index works.
                                                 if (messages.isNotEmpty()) {
-                                                    messages[messages.lastIndex] = aiMsg.copy(content = currentString)
+                                                    messages[messages.lastIndex] = aiMsg.copy(content = filteredString)
                                                 }
                                                 if (elapsed > 0) tps = tokenCount / elapsed
                                             }

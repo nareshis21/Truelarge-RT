@@ -233,7 +233,7 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
     
     // When keeping history, usually we don't want to re-add BOS if nPast > 0
     bool add_bos = (nPast == 0);
-    int n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.length(), tokens.data(), tokens.size(), add_bos, false);
+    int n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.length(), tokens.data(), tokens.size(), add_bos, true);
     if (n_tokens < 0) {
         LOGE("Tokenization failed");
         return false;
@@ -451,8 +451,8 @@ std::string TrueLargeRuntime::step() {
     llama_sampler_accept(sampler, next_token);
 
     const llama_vocab* vocab = llama_model_get_vocab(model);
-    if (next_token == llama_vocab_eos(vocab)) {
-        LOGI("EOS generated");
+    if (llama_vocab_is_eog(vocab, next_token)) {
+        LOGI("EOG generated (EOS/EOT)");
         return "";
     }
 
@@ -1317,7 +1317,8 @@ std::string TrueLargeRuntime::step_lbl() {
     // which triggers an internal safety check fail in llama.cpp.
     // Instead, we manually build the candidates array and apply the sampler chain.
     float* prev_logits = llama_get_logits(ctx);
-    int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    const llama_vocab* vocab = llama_model_get_vocab(model);
+    int n_vocab = llama_vocab_n_tokens(vocab);
     
     std::vector<llama_token_data> candidates;
     candidates.reserve(n_vocab);
@@ -1339,8 +1340,8 @@ std::string TrueLargeRuntime::step_lbl() {
     
     llama_token id = candidates_p.data[max_idx].id;
     llama_sampler_accept(sampler, id);
-    if (id == llama_vocab_eos(llama_model_get_vocab(model))) {
-        LOGI("EOS generated in step_lbl");
+    if (llama_vocab_is_eog(vocab, id)) {
+        LOGI("EOG generated in step_lbl (EOS/EOT)");
         return "";
     }
 
