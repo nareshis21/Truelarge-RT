@@ -201,6 +201,7 @@ static llama_batch g_batch;
 static bool g_batch_init = false;
 
 bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory) {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex);
     t_session_start = std::chrono::steady_clock::now();
     // set_cpu_affinity(); // Pin to big cores (REMOVED: Caused performance issues)
     if (!model || !ctx) {
@@ -239,6 +240,11 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
     }
     tokens.resize(n_tokens);
     LOGI("Tokenized prompt: %d tokens. History: %d. \"%s\"", n_tokens, nPast, prompt.c_str());
+
+    if (n_tokens <= 0) {
+        LOGW("createSession: Empty prompt (0 tokens). Bypassing pre-fill.");
+        return true; 
+    }
 
     // Diagnostic: Print prompt tokens
     for (int i = 0; i < n_tokens; i++) {
@@ -312,12 +318,12 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
         if (!ctx_compute) {
             ggml_set_abort_callback(custom_ggml_abort_callback);
             int n_embd = llama_model_n_embd(model);
-            size_t emb_size = std::max((size_t)(2048LL*1024*1024), (size_t)n_tokens * n_embd * 4 * 4) + 128*1024*1024;
+            size_t emb_size = std::max((size_t)(1024LL*1024*1024), (size_t)n_tokens * n_embd * 4 * 4) + 128*1024*1024;
             struct ggml_init_params params_init = { .mem_size = emb_size, .mem_buffer = NULL };
             ctx_compute = ggml_init(params_init);
         }
         if (!ctx_compute_back) {
-            struct ggml_init_params params_back = { .mem_size = 2048LL*1024*1024 + (size_t)n_tokens * 1024 * 4, .mem_buffer = NULL };
+            struct ggml_init_params params_back = { .mem_size = 1024LL*1024*1024 + (size_t)n_tokens * 1024 * 4, .mem_buffer = NULL };
             ctx_compute_back = ggml_init(params_back);
         }
         
@@ -344,7 +350,7 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
         struct ggml_context* ctx_ping = ctx_compute;
         struct ggml_context* ctx_pong = ctx_compute_back;
         int n_layer = llama_model_n_layer(model);
-        struct ggml_init_params params_layer = { .mem_size = 2048LL*1024*1024, .mem_buffer = NULL };
+        struct ggml_init_params params_layer = { .mem_size = 1024LL*1024*1024, .mem_buffer = NULL };
         
         for (int i = 0; i < n_layer; i++) {
             if (i % 8 == 0) LOGI("LBL Pre-fill: Progress %d/%d layers", i, n_layer);
@@ -433,6 +439,7 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
 
 
 std::string TrueLargeRuntime::step() {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex);
     if (!ctx || !sampler) return "";
 
     if (useLayerByLayer) {
@@ -504,6 +511,7 @@ int TrueLargeRuntime::getContextCurrent() {
 }
 
 void TrueLargeRuntime::release() {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex);
     if (g_batch_init) {
         llama_batch_free(g_batch);
         g_batch_init = false;
@@ -1160,22 +1168,6 @@ struct ggml_tensor* TrueLargeRuntime::forwardLayer(int layerIndex, struct ggml_t
         // Repeat to [head_dim, n_tokens, n_head_kv, n_group]
         // Then reshape/permute to [head_dim, n_tokens, n_head]
         
-        // Correct approach:
-        // K is [head_dim, n_tokens, n_head_kv]
-        // 1. Reshape to [head_dim, n_tokens, n_head_kv, 1]
-        K_cur = ggml_reshape_4d(ctx_build, K_cur, head_dim, nPast + n_tokens, n_head_kv, 1);
-        // 2. Repeat to [..., n_group]
-        K_cur = ggml_repeat(ctx_build, K_cur, ggml_new_tensor_4d(ctx_build, K_cur->type, head_dim, nPast + n_tokens, n_head_kv, n_group));
-        // 3. Reshape 3D to [head_dim, n_tokens, n_head]
-        // Note: ggml_repeat repeats the last dim.
-        // We need to ensure the logical layout is correct.
-        // If we want [head_dim, n_tokens, n_head], we need "n_head" to be the outer dim.
-        // But K_cur internal layout is usually [head_dim, n_tokens, n_head].
-        
-        // Let's use standard llama.cpp way:
-        // K: [head_dim, n_tokens, n_head_kv]
-        // Permute to [head_dim, n_head_kv, n_tokens]? No.
-        
         // Simplified GQA without complex permutes for now (safer):
         // Reshape K to [head_dim, n_tokens, n_head_kv, 1]
         // Repeat to [head_dim, n_tokens, n_head_kv, n_group]
@@ -1319,6 +1311,7 @@ struct ggml_tensor* TrueLargeRuntime::forwardLayer(int layerIndex, struct ggml_t
 }
 
 std::string TrueLargeRuntime::step_lbl() {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex);
     // 1. Sample from previous logits
     // We cannot use llama_sampler_sample(..., -1) because we bypass llama_decode,
     // which triggers an internal safety check fail in llama.cpp.
@@ -1354,8 +1347,8 @@ std::string TrueLargeRuntime::step_lbl() {
     // 2. Prepare embedding
     ggml_free(ctx_compute);
     ggml_set_abort_callback(custom_ggml_abort_callback);
-    // Increase prompt context size to 2GB for GQA/MoE nodes and MXFP4 additions
-    struct ggml_init_params params = { .mem_size = 2048LL*1024*1024, .mem_buffer = NULL };
+    // Increase prompt context size to 1GB for GQA/MoE nodes
+    struct ggml_init_params params = { .mem_size = 1024LL*1024*1024, .mem_buffer = NULL };
     ctx_compute = ggml_init(params);
     
     struct ggml_tensor* input = nullptr;
@@ -1497,6 +1490,11 @@ std::string TrueLargeRuntime::step_lbl() {
     lastTotalTime = since_start;
     lastRAM = getMemoryUsageKB() / 1024; // MB
     lastCPUFreq = (double)getCurrentCpuFreqHz() / 1e9; // GHz
+    
+    if (generatedTokens.size() == 1) {
+        lastTTFT = std::chrono::duration<double, std::milli>(end_time - t_session_start).count();
+        LOGI("TTFT (LBL): %.2f ms", lastTTFT);
+    }
     
     std::string piece = token_to_str(ctx, id);
     LOGI("LBL Step: %lu tokens generated -> '%s' | TPS: %.2f | RAM: %ld MB | CPU: %.2f GHz", 

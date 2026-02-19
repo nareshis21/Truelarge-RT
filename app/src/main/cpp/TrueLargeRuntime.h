@@ -10,6 +10,7 @@
 #include "LayerLoader.h"
 #include "LayerScheduler.h"
 #include "llama.h" 
+#include <mutex>
 
 class TrueLargeRuntime {
 public:
@@ -144,6 +145,8 @@ private:
     
     // Metadata helper
     float getModelMetaFloat(const char* key, float defaultValue);
+
+    std::recursive_mutex engine_mutex;
 };
 
 
