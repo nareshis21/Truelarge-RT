@@ -53,6 +53,9 @@ LayerMap LayerLoader::loadLayerMap(size_t offset, size_t size) {
         return lm;
     }
 
+    // Hint to kernel: read binary data into page cache ASAP
+    madvise(mapPtr, mapSize, MADV_WILLNEED);
+
     lm.data = static_cast<char*>(mapPtr) + diff;
     lm.size = size;
     lm.fullMapPtr = mapPtr;

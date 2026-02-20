@@ -1,6 +1,6 @@
 # Python Utilities & Scripts
 
-This directory contains Python scripts used for maintaining the repository, optimizing assets, and converting models.
+This directory contains internal Python scripts used for maintaining the repository and documentation for leveraging upstream `llama.cpp` utilities.
 
 ## 🛠️ Repository Utilities
 These scripts are located in the `/scripts` folder.
@@ -20,8 +20,8 @@ python scripts/optimize_images.py
 
 ---
 
-## 🧠 Model Conversion Scripts
-These scripts are part of the `llama.cpp` core and are used to prepare GGUF models for use in the app.
+## 🧠 Upstream Utilities (llama.cpp)
+These scripts are part of the core `llama.cpp` dependency and are used to prepare models for use in the app.
 
 ### 1. `convert_hf_to_gguf.py`
 The primary script for converting HuggingFace models (Safetensors/PyTorch) to the GGUF format used by TrueLarge-RT.

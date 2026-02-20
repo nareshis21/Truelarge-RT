@@ -2,12 +2,14 @@
 #define LAYER_SCHEDULER_H
 
 #include <map>
+#include <deque>
 #include <set>
 #include <vector>
 #include <memory>
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <condition_variable>
 #include "LayerLoader.h"
 #include "GGUFHeaderParser.h"
 #include "WeightBuffer.h"
@@ -33,6 +35,8 @@ public:
 
     // Get size of layer data
     size_t getLayerSize(int layerIndex);
+    
+    int getMaxLayersInMemory() const { return maxLayersInMemory; }
 
     // Start background prefetcher (optional)
     void startPrefetcher();
@@ -56,11 +60,22 @@ private:
     // Mutex for thread safety
     std::mutex mutex;
     
+    // TRACKING: Currently used in compute
+    std::atomic<int> activeComputeLayer;
+    
     // Prefetch logic
     std::atomic<bool> prefetchRunning;
     std::thread prefetchThread;
     // Simple queue logic (or just a target)
-    std::atomic<int> nextPrefetchLayer;
+    std::deque<int> prefetchQueue;
+    int currentPrefetchingLayer; // -1 if idle
+    
+    // Sync for prefetcher
+    std::mutex prefetchMutex;
+    std::condition_variable prefetchCv;
+    bool prefetchReady; // Dummy flag if needed, usually atomic nextPrefetch suffices
+    
+    void prefetchThreadLoop();
     
     // Helper to actually load
     bool loadLayerInternal(int layerIndex);

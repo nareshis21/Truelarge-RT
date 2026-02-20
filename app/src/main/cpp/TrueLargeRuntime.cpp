@@ -355,6 +355,11 @@ bool TrueLargeRuntime::createSession(const std::string& prompt, bool keepHistory
         for (int i = 0; i < n_layer; i++) {
             if (i % 8 == 0) LOGI("LBL Pre-fill: Progress %d/%d layers", i, n_layer);
             
+            // Peak Ahead: Queue next 3 layers
+            if (i + 1 < n_layer) scheduler->queuePrefetch(i + 1);
+            if (i + 2 < n_layer) scheduler->queuePrefetch(i + 2);
+            if (i + 3 < n_layer) scheduler->queuePrefetch(i + 3);
+            
             // Reset pong context for this layer
             ggml_free(ctx_pong);
             ctx_pong = ggml_init(params_layer);
@@ -533,7 +538,10 @@ void TrueLargeRuntime::release() {
         model = nullptr;
     }
     if (layerLoader) layerLoader.reset();
-    if (scheduler) scheduler.reset();
+    if (scheduler) {
+        scheduler->stopPrefetcher();
+        scheduler.reset();
+    }
     if (headerParser) headerParser.reset();
     
     if (ctx_compute) { ggml_free(ctx_compute); ctx_compute = nullptr; }
@@ -593,13 +601,18 @@ void TrueLargeRuntime::initLayerByLayer() {
     int head_dim = n_embd / n_head;
     size_t kv_size_kb = ((size_t)n_layer * 2 * kv_max_tokens * (n_head_kv * head_dim) * sizeof(float)) / 1024;
 
-    int maxLayers = 2; // Strict default for stability
+    int maxLayers = 2; // Default for stability
     if (layerSizeKB > 0) {
-        // Leave 1.5GB for OS/App and subtract KV Cache from budget
-        // Safety buffer KB: 1,572,864 (1.5GB)
-        long safetyBufferKB = 1536 * 1024; 
+        // Greedy Budgeting: Reduce safety buffer to allow more layers in RAM
+        // 500MB is generally enough for the Android system + our non-weight overhead
+        long safetyBufferKB = 500 * 1024; 
+        if (availRamKB > 8000 * 1024) safetyBufferKB = 400 * 1024; // Even more aggressive on 8GB+ devices
+        
         long workingBudgetKB = availRamKB - safetyBufferKB - (long)kv_size_kb;
         
+        LOGI("LBL Budget: Avail=%ld MB, MinSafety=%ld MB, KV_Cache=%ld MB, Remaining=%ld MB", 
+             availRamKB/1024, safetyBufferKB/1024, kv_size_kb/1024, workingBudgetKB/1024);
+
         if (workingBudgetKB > 0) {
             maxLayers = workingBudgetKB / layerSizeKB;
         }
@@ -611,7 +624,7 @@ void TrueLargeRuntime::initLayerByLayer() {
     }
     
     if (maxLayers < 1) maxLayers = 1; // Minimum 1 for execution
-    if (maxLayers > 10) maxLayers = 10; // Relaxed cap for experimental high-end usage
+    if (maxLayers > 80) maxLayers = 80; // High cap for flagship devices
     
     // Captured HParams
     char arch[64] = "unknown";
@@ -700,6 +713,7 @@ void TrueLargeRuntime::initLayerByLayer() {
     }
     
     scheduler = std::make_unique<LayerScheduler>(modelPath, headerParser.get(), maxLayers);
+    scheduler->startPrefetcher();
     useLayerByLayer = true;
     
     initGlobalWeights();
@@ -1400,6 +1414,17 @@ std::string TrueLargeRuntime::step_lbl() {
         // Log progress
         // LOGI("Loop: Layer %d/%d", i, n_layer);
         
+        // Buffering: Fill the available RAM window with future layers
+        // We queue up to (maxLayers - 1) ahead of current compute
+        for (int lookahead = 1; lookahead < scheduler->getMaxLayersInMemory(); ++lookahead) {
+            int target = i + lookahead;
+            if (target < n_layer) {
+                scheduler->queuePrefetch(target);
+            } else {
+                break;
+            }
+        }
+        
         struct ggml_tensor* out = forwardLayer(i, input, ctx_next);
         if (!out) {
             LOGE("Layer %d failed to build", i);
@@ -1479,6 +1504,13 @@ std::string TrueLargeRuntime::step_lbl() {
     generatedTokens.push_back(id);
     nPast++;
     
+    // Inter-Token Pipelining: Prime the buffer for the next token's first layers
+    if (useLayerByLayer && scheduler) {
+        for (int j = 0; j < std::min(8, scheduler->getMaxLayersInMemory()); ++j) {
+            scheduler->queuePrefetch(j);
+        }
+    }
+
     // Telemetry
     auto end_time = std::chrono::steady_clock::now();
     double total_duration = std::chrono::duration<double>(end_time - t_generation_start).count();
@@ -1498,7 +1530,7 @@ std::string TrueLargeRuntime::step_lbl() {
     }
     
     std::string piece = token_to_str(ctx, id);
-    LOGI("LBL Step: %lu tokens generated -> '%s' | TPS: %.2f | RAM: %ld MB | CPU: %.2f GHz", 
+    LOGI("LBL Step: %lu tokens generated -> '%s' | TPS: %.4f | RAM: %ld MB | CPU: %.2f GHz", 
          generatedTokens.size(), piece.c_str(), lastTPS, lastRAM, lastCPUFreq);
 
     return piece;

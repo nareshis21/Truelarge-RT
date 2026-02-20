@@ -53,3 +53,7 @@ Thumbs.db
 *.bak
 __pycache__/
 README.html
+*.tex
+*.pdf
+*.bib
+*.sty
