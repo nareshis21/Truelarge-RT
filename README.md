@@ -193,14 +193,14 @@ To hide latency, TrueLarge-RT maintains two lightweight compute contexts (`ctx_p
 
 ## Performance Benchmark
 
-| Model | Precision | Device | Chipset | Device RAM | Used RAM (MB) | Speed (TPS) |
-|---|---|---|---|---|---|---|
-| **Llama-3.3-70B** | Q2_XS | **Realme GT Neo 3T** | **SD870** | **6GB** | **~1500** | **0.40** |
-| **Llama-3.3-70B** | Q2_XS | **Poco M4 Pro 5G** | **Dimensity 810** | **6GB** | **~3000** | **0.023** |
-| **Llama-3.3-70B** | Q2_XS | **Realme 2 Pro** | **SD660** | **4GB** | **~1400** | **0.01** |
-| **Llama-3.1-8B** | Q4_K_M | **Poco M4 Pro 5G** | **Dimensity 810** | **6GB** | **~3000** | **0.1** |
-| **Llama-3.1-8B** | Q4_K_M | **Realme 2 Pro** | **SD660** | **4GB** | **~1400** | **0.045** |
-| **Qwen-2.5-0.5B** | Q4_K_M | **Poco M4 Pro 5G** | **Dimensity 810** | **6GB** | **~3000** | **13.0** |
+| Model | Precision | Device | Chipset | Storage | Device RAM | Used RAM (MB) | Speed (TPS) |
+|---|---|---|---|---|---|---|---|
+| **Llama-3.3-70B** | Q2_XS | **Realme GT Neo 3T** | **SD870** | **UFS 3.1** | **6GB** | **~1500** | **0.040** |
+| **Llama-3.3-70B** | Q2_XS | **Poco M4 Pro 5G** | **Dimensity 810** | **UFS 2.2** | **6GB** | **~3000** | **0.023** |
+| **Llama-3.3-70B** | Q2_XS | **Realme 2 Pro** | **SD660** | **UFS 2.1** | **4GB** | **~1400** | **0.01** |
+| **Llama-3.1-8B** | Q4_K_M | **Poco M4 Pro 5G** | **Dimensity 810** | **UFS 2.2** | **6GB** | **~3000** | **0.1** |
+| **Llama-3.1-8B** | Q4_K_M | **Realme 2 Pro** | **SD660** | **UFS 2.1** | **4GB** | **~1400** | **0.045** |
+| **Qwen-2.5-0.5B** | Q4_K_M | **Poco M4 Pro 5G** | **Dimensity 810** | **UFS 2.2** | **6GB** | **~3000** | **13.0** |
 | **Qwen-2.5-0.5B** | Q4_K_M | **Realme 2 Pro** | **SD660** | **4GB** | **~1400** | **15.0** |
 
 
