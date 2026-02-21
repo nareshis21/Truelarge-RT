@@ -27,7 +27,7 @@ bool LayerScheduler::prepareLayer(int layerIndex) {
     // Mark as active immediately so prefetcher doesn't evict it
     activeComputeLayer = layerIndex;
 
-    std::lock_guard<std::mutex> lock(mutex);
+    std::unique_lock<std::mutex> lock(mutex);
 
     if (loadedLayers.count(layerIndex)) {
         return true; // Already loaded
@@ -35,7 +35,7 @@ bool LayerScheduler::prepareLayer(int layerIndex) {
 
     // NEW: If this layer is currently being prefetched or in queue, wait for it
     {
-        std::unique_lock<std::mutex> lock(prefetchMutex);
+        std::unique_lock<std::mutex> pfLock(prefetchMutex);
         bool inQueueOrLoading = (currentPrefetchingLayer == layerIndex);
         if (!inQueueOrLoading) {
             for (int q : prefetchQueue) {
@@ -45,9 +45,22 @@ bool LayerScheduler::prepareLayer(int layerIndex) {
         
         if (inQueueOrLoading) {
             LOGI("PrepareLayer: HIT prefetch/queue for layer %d. Waiting for I/O...", layerIndex);
-            prefetchCv.wait(lock, [this, layerIndex] { 
+            
+            // CRITICAL FIX: Unlock 'mutex' before waiting, otherwise prefetch thread 
+            // will deadlock when it tries to lock 'mutex' to finish loading.
+            // But we need to keep 'prefetchMutex' locked for the wait.
+            // We use a temporary unlocker for 'mutex' or just reduce its scope.
+            
+            // Since 'mutex' (the lock from line 30) is held, we MUST unlock it.
+            lock.unlock(); 
+            
+            prefetchCv.wait(pfLock, [this, layerIndex] { 
                 return loadedLayers.count(layerIndex) > 0 || !prefetchRunning; 
             });
+            
+            // Re-lock 'mutex' after waking up to maintain class invariants
+            lock.lock();
+            
             if (loadedLayers.count(layerIndex)) return true;
         }
     }

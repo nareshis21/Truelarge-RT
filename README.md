@@ -17,7 +17,7 @@
 </div>
 
 > [!IMPORTANT]
-> **Performance Milestone**: TrueLarge-RT successfully runs **Llama-3.3-70B-Instruct-Q2_XS** on the **Realme 2 Pro (4GB RAM)** at **0.1 TPS**. This demonstrates absolute scalability for massive models on legacy hardware.
+> **Performance Milestone**: TrueLarge-RT successfully runs **Llama-3.3-70B-Instruct-Q2_XS** on the **Realme 2 Pro** with only **~1400MB available RAM** (4GB device) at **0.01 TPS**. This demonstrates absolute scalability on legacy hardware constrained by **UFS 2.1** storage speeds.
 
 **TrueLarge-RT** is a high-performance native inference engine that enables **32B+ parameter LLMs** to run on consumer Android devices (4GB-8GB RAM) without crashing. 
 
@@ -193,16 +193,14 @@ To hide latency, TrueLarge-RT maintains two lightweight compute contexts (`ctx_p
 
 ## Performance Benchmark
 
-| Model | Precision | Device | Chipset | RAM | Speed (TPS) |
-|---|---|---|---|---|---|
-| **Llama-3.3-70B** | Q2_XS | **Realme 2 Pro** | **SD660** | **4GB** | **0.01** |
-| **Llama-3.3-70B** | Q2_XS | **Poco M4 Pro 5G** | **Dimensity 810** | **4GB/6GB** | **0.023** |
-| **Llama-3.1-8B** | Q4_K_M | **Realme 2 Pro** | **SD660** | **4GB** | *Coming Soon* |
-| **Llama-3.1-8B** | Q4_K_M | **Poco M4 Pro 5G** | **Dimensity 810** | **4GB/6GB** | *Coming Soon* |
-| Qwen2.5-32B | Q4_K_M | Reference | - | 4GB | 0.4 |
-| **Qwen-2.5-0.5B** | Q4_K_M | **Realme 2 Pro** | **SD660** | **4GB** | **15.0** |
-| **Qwen-2.5-0.5B** | Q4_K_M | **Poco M4 Pro 5G** | **Dimensity 810** | **4GB/6GB** | **13.0** |
-| Llama-3-8B | FP16 | Reference | - | 12GB | 3.2 (Turbo) |
+| Model | Precision | Device | Chipset | Device RAM | Used RAM (MB) | Speed (TPS) |
+|---|---|---|---|---|---|---|
+| **Llama-3.3-70B** | Q2_XS | **Realme 2 Pro** | **SD660** | **4GB** | **~1400** | **0.01** |
+| **Llama-3.3-70B** | Q2_XS | **Poco M4 Pro 5G** | **Dimensity 810** | **6GB** | **~3000** | **0.023** |
+| **Llama-3.1-8B** | Q4_K_M | **Realme 2 Pro** | **SD660** | **4GB** | **~1400** | **0.045** |
+| **Llama-3.1-8B** | Q4_K_M | **Poco M4 Pro 5G** | **Dimensity 810** | **6GB** | **~3000** | **0.1** |
+| **Qwen-2.5-0.5B** | Q4_K_M | **Realme 2 Pro** | **SD660** | **4GB** | **~1400** | **15.0** |
+| **Qwen-2.5-0.5B** | Q4_K_M | **Poco M4 Pro 5G** | **Dimensity 810** | **6GB** | **~3000** | **13.0** |
 
 
 ## 🐍 Python Utilities & Scripts
