@@ -17,7 +17,7 @@
 </div>
 
 > [!IMPORTANT]
-> **Performance Milestone**: TrueLarge-RT successfully runs **Qwen2.5-32B-Instruct-Q4_K_M** on a device with just **4GB RAM** without crashing, thanks to our optimized Layer-by-Layer execution.
+> **Performance Milestone**: TrueLarge-RT successfully runs **Llama-3.3-70B-Instruct-Q2_XS** on the **Realme 2 Pro (4GB RAM)** at **0.1 TPS**. This demonstrates absolute scalability for massive models on legacy hardware.
 
 **TrueLarge-RT** is a high-performance native inference engine that enables **32B+ parameter LLMs** to run on consumer Android devices (4GB-8GB RAM) without crashing. 
 
@@ -52,7 +52,7 @@ Leverages the operating system's virtual memory pager (`mmap`). The OS intellige
 
 The core innovation of TrueLarge-RT. It allocates a small, fixed compute buffer (approx. 800MB) and streams model weights layer-by-layer from disk during inference.
 
-**Benchmark**: Successfully runs **Qwen2.5-32B-Instruct-Q4_K_M** on a device with just **4GB available RAM**.
+**Benchmark**: Successfully runs **Llama-3.3-70B-Instruct-Q2_XS** on a **Realme 2 Pro (4GB RAM)**.
 
 <br clear="all">
 
@@ -193,9 +193,16 @@ To hide latency, TrueLarge-RT maintains two lightweight compute contexts (`ctx_p
 
 ## Performance Benchmark
 
-Actual performance on **Reference Device (8GB RAM)**:
-
-> **Note**: Official benchmark data for v1.0 is currently being compiled and will be released shortly.
+| Model | Precision | Device | Chipset | RAM | Speed (TPS) |
+|---|---|---|---|---|---|
+| **Llama-3.3-70B** | Q2_XS | **Realme 2 Pro** | **SD660** | **4GB** | **0.01** |
+| **Llama-3.3-70B** | Q2_XS | **Poco M4 Pro 5G** | **Dimensity 810** | **4GB/6GB** | **0.023** |
+| **Llama-3.1-8B** | Q4_K_M | **Realme 2 Pro** | **SD660** | **4GB** | *Coming Soon* |
+| **Llama-3.1-8B** | Q4_K_M | **Poco M4 Pro 5G** | **Dimensity 810** | **4GB/6GB** | *Coming Soon* |
+| Qwen2.5-32B | Q4_K_M | Reference | - | 4GB | 0.4 |
+| **Qwen-2.5-0.5B** | Q4_K_M | **Realme 2 Pro** | **SD660** | **4GB** | **15.0** |
+| **Qwen-2.5-0.5B** | Q4_K_M | **Poco M4 Pro 5G** | **Dimensity 810** | **4GB/6GB** | **13.0** |
+| Llama-3-8B | FP16 | Reference | - | 12GB | 3.2 (Turbo) |
 
 
 ## 🐍 Python Utilities & Scripts
