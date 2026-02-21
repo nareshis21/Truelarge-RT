@@ -203,14 +203,6 @@ To hide latency, TrueLarge-RT maintains two lightweight compute contexts (`ctx_p
 | **Qwen-2.5-0.5B** | Q4_K_M | **Poco M4 Pro 5G** | **Dimensity 810** | **6GB** | **~3000** | **13.0** |
 
 
-## 🐍 Python Utilities & Scripts
-
-This directory contains internal Python scripts used for maintaining the repository and documentation for leveraging upstream `llama.cpp` utilities for model preparation. See the [Scripts README](scripts/README.md) for details on:
-*   **Asset Optimization** (Internal): Auto-crop icons and compress images.
-*   **Upstream Utilities** (`llama.cpp`): 
-    *   **Model Conversion**: Convert HuggingFace models to GGUF format.
-    *   **Structured Output**: Generate GBNF grammars from JSON schemas.
-
 ## Acknowledgements
 
 - [llama.cpp](https://github.com/ggerganov/llama.cpp): The core tensor library.
