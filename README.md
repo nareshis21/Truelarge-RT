@@ -63,7 +63,6 @@ The core innovation of TrueLarge-RT. It allocates a small, fixed compute buffer 
 - **Resilient Model Manager**: Integrated background downloader for massive model files.
 - **Professional Telemetry**: Real-time graphs for TTFT (ms), RAM (MB), and CPU (GHz).
 - **Universal Support**: Works with **Llama 3**, **Qwen 2.5**, **Mistral**, **Phi-3**, and more.
-- **Thermal Efficiency**: -30% reduced throttling via proprietary kernel fusion.
 - **Mixture-of-Experts (MoE)**: Support is actively being researched.
 
 ## Installation
