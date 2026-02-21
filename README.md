@@ -195,6 +195,7 @@ To hide latency, TrueLarge-RT maintains two lightweight compute contexts (`ctx_p
 
 | Model | Precision | Device | Chipset | Device RAM | Used RAM (MB) | Speed (TPS) |
 |---|---|---|---|---|---|---|
+| **Llama-3.3-70B** | Q2_XS | **Realme GT Neo 3T** | **SD870** | **6GB** | **~1500** | **0.40** |
 | **Llama-3.3-70B** | Q2_XS | **Poco M4 Pro 5G** | **Dimensity 810** | **6GB** | **~3000** | **0.023** |
 | **Llama-3.3-70B** | Q2_XS | **Realme 2 Pro** | **SD660** | **4GB** | **~1400** | **0.01** |
 | **Llama-3.1-8B** | Q4_K_M | **Poco M4 Pro 5G** | **Dimensity 810** | **6GB** | **~3000** | **0.1** |
